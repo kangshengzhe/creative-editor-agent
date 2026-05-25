@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Pytest / Hypothesis
+.pytest_cache/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Mypy / type caches
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================
+# Secrets — NEVER commit these
+# ============================================================
+# Environment files (real values)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.staging
+.env.backup
+.env.bak
+
+# Generic secret containers
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+credentials.yaml
+
+# Cryptographic material
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# Cloud / vendor credential files
+.aws/credentials
+.aws/config
+.gcp/credentials.json
+service-account*.json
+*-credentials.json
+
+# Token / API key dumps
+token.txt
+tokens.txt
+api_key.txt
+api_keys.txt
+*.token
+# ============================================================
+
+# Agent-generated trace artifacts
+traces/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
