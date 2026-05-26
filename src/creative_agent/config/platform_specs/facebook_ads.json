@@ -1,0 +1,12 @@
+{
+  "platform": "FACEBOOK_ADS",
+  "char_limits": {
+    "HEADLINE": 40,
+    "DESCRIPTION": 125,
+    "CTA": 20,
+    "LONG_COPY": 500
+  },
+  "allowed_creative_types": ["HEADLINE", "DESCRIPTION", "CTA", "LONG_COPY"],
+  "forbidden_symbols": ["!!", "??"],
+  "notes": "Facebook Ads recommended limits to avoid copy truncation in feed previews."
+}

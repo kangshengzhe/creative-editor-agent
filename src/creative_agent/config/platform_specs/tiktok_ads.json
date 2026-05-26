@@ -1,0 +1,12 @@
+{
+  "platform": "TIKTOK_ADS",
+  "char_limits": {
+    "HEADLINE": 40,
+    "DESCRIPTION": 100,
+    "CTA": 20,
+    "LONG_COPY": 300
+  },
+  "allowed_creative_types": ["HEADLINE", "DESCRIPTION", "CTA", "LONG_COPY"],
+  "forbidden_symbols": ["!!", "??"],
+  "notes": "TikTok Ads in-feed creative copy limits."
+}

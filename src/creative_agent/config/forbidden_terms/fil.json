@@ -1,0 +1,93 @@
+[
+  {
+    "term": "garantisadong jackpot",
+    "language": "fil",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Tanggalin ang garantiyang panalo; gumamit ng neutral na pananalita."
+  },
+  {
+    "term": "sigurong panalo",
+    "language": "fil",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Iwasan ang pangakong panalo; ilarawan ang laro nang patas."
+  },
+  {
+    "term": "pustahan na panalo",
+    "language": "fil",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Huwag ipangakong tatalo sa pustahan; alisin ang claim ng panalo."
+  },
+  {
+    "term": "lunas sa cancer",
+    "language": "fil",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Tanggalin ang pangakong gamot sa kanser; bumalik sa siyentipikong batayan."
+  },
+  {
+    "term": "milagrong gamot",
+    "language": "fil",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Iwasan ang salitang 'milagro'; ilarawan ang aktwal na benepisyo."
+  },
+  {
+    "term": "para sa lalaki lamang",
+    "language": "fil",
+    "category": "DISCRIMINATION",
+    "severity": "BLOCK",
+    "suggestion": "Alisin ang restriksiyon sa kasarian; gawing inklusibo ang alok."
+  },
+  {
+    "term": "100% ligtas",
+    "language": "fil",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Gamitin ang 'idinisenyo para sa kaligtasan' sa halip na ganap na pag-aangkin."
+  },
+  {
+    "term": "walang panganib",
+    "language": "fil",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Gumamit ng 'mababang panganib kapag tama ang gamit'."
+  },
+  {
+    "term": "huling pagkakataon",
+    "language": "fil",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "Magbigay ng tiyak na petsa imbes na ipakahulugang permanenteng wakas."
+  },
+  {
+    "term": "ngayon lang",
+    "language": "fil",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "Tukuyin ang eksaktong panahon ng promo."
+  },
+  {
+    "term": "garantisado",
+    "language": "fil",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Palitan ng 'malamang' o ipresenta ang sinusukat na resulta."
+  },
+  {
+    "term": "perpekto",
+    "language": "fil",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Gumamit ng partikular na katangian sa halip na absolutong papuri."
+  },
+  {
+    "term": "pinakamahusay",
+    "language": "fil",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Palitan ng masusukat na paghahambing o tanggalin."
+  }
+]

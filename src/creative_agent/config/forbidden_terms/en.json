@@ -1,0 +1,128 @@
+[
+  {
+    "term": "guaranteed jackpot",
+    "language": "en",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Remove gambling guarantees; describe entertainment value or odds factually."
+  },
+  {
+    "term": "sure win",
+    "language": "en",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Avoid promising wins; use neutral framing such as 'play and enjoy'."
+  },
+  {
+    "term": "bet money to win",
+    "language": "en",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Do not promote betting outcomes; rephrase to avoid wagering claims."
+  },
+  {
+    "term": "cure cancer",
+    "language": "en",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Remove the curative claim; reference clinically verified benefits only."
+  },
+  {
+    "term": "miracle drug",
+    "language": "en",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Avoid 'miracle' claims; describe the product's verified mechanism."
+  },
+  {
+    "term": "instant cure",
+    "language": "en",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Replace with evidence-based wording about typical timeframes."
+  },
+  {
+    "term": "men only",
+    "language": "en",
+    "category": "DISCRIMINATION",
+    "severity": "BLOCK",
+    "suggestion": "Remove gender restriction; phrase the offer inclusively."
+  },
+  {
+    "term": "whites only",
+    "language": "en",
+    "category": "DISCRIMINATION",
+    "severity": "BLOCK",
+    "suggestion": "Remove racial restriction; ads must not exclude protected groups."
+  },
+  {
+    "term": "covid cure",
+    "language": "en",
+    "category": "SENSITIVE_EVENT",
+    "severity": "BLOCK",
+    "suggestion": "Do not reference COVID-19 cures; comply with sensitive event policies."
+  },
+  {
+    "term": "war profiteer",
+    "language": "en",
+    "category": "SENSITIVE_EVENT",
+    "severity": "BLOCK",
+    "suggestion": "Avoid wartime profit claims; remove sensitive event references."
+  },
+  {
+    "term": "100% safe",
+    "language": "en",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Replace absolute claim with qualified language like 'designed for safety'."
+  },
+  {
+    "term": "no risk",
+    "language": "en",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Use 'low risk when used as directed' or similar qualified phrasing."
+  },
+  {
+    "term": "zero risk",
+    "language": "en",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Avoid absolute risk claims; describe known limitations."
+  },
+  {
+    "term": "last chance ever",
+    "language": "en",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "Use a real, dated deadline such as 'ends Friday' instead of permanence claims."
+  },
+  {
+    "term": "only today",
+    "language": "en",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "Specify the exact promo period to avoid implying false urgency."
+  },
+  {
+    "term": "guaranteed",
+    "language": "en",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Replace with 'highly likely' or quantify with measured outcomes."
+  },
+  {
+    "term": "perfect",
+    "language": "en",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Use specific qualities ('clear', 'reliable') instead of absolute praise."
+  },
+  {
+    "term": "best ever",
+    "language": "en",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Replace superlative with verifiable comparison or remove."
+  }
+]

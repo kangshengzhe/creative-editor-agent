@@ -1,0 +1,12 @@
+{
+  "platform": "GOOGLE_ADS",
+  "char_limits": {
+    "HEADLINE": 30,
+    "DESCRIPTION": 90,
+    "CTA": 15,
+    "LONG_COPY": 300
+  },
+  "allowed_creative_types": ["HEADLINE", "DESCRIPTION", "CTA", "LONG_COPY"],
+  "forbidden_symbols": ["!!", "??"],
+  "notes": "Google Ads policy: headline 30 chars, description 90 chars."
+}

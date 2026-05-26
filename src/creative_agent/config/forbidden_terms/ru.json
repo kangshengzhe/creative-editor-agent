@@ -1,0 +1,93 @@
+[
+  {
+    "term": "гарантированный джекпот",
+    "language": "ru",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Уберите гарантии выигрыша; опишите развлекательную ценность игры."
+  },
+  {
+    "term": "верный выигрыш",
+    "language": "ru",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Не обещайте выигрыш; используйте нейтральные формулировки."
+  },
+  {
+    "term": "ставка наверняка",
+    "language": "ru",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "Удалите утверждение о гарантированной ставке."
+  },
+  {
+    "term": "лечит рак",
+    "language": "ru",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Уберите утверждение о лечении рака; ссылайтесь на клинически подтверждённые свойства."
+  },
+  {
+    "term": "чудо-лекарство",
+    "language": "ru",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "Избегайте слова «чудо»; опишите проверенный механизм действия."
+  },
+  {
+    "term": "только для мужчин",
+    "language": "ru",
+    "category": "DISCRIMINATION",
+    "severity": "BLOCK",
+    "suggestion": "Уберите гендерное ограничение; сформулируйте предложение инклюзивно."
+  },
+  {
+    "term": "100% безопасно",
+    "language": "ru",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Замените на «разработано с учётом безопасности» вместо абсолютного утверждения."
+  },
+  {
+    "term": "без риска",
+    "language": "ru",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "Используйте «низкий риск при правильном применении»."
+  },
+  {
+    "term": "последний шанс",
+    "language": "ru",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "Укажите конкретный срок акции, не намекая на безвозвратность."
+  },
+  {
+    "term": "только сегодня",
+    "language": "ru",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "Уточните точные даты промо, чтобы избежать ложной срочности."
+  },
+  {
+    "term": "гарантировано",
+    "language": "ru",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Замените на «вероятно» или приведите измеримый показатель."
+  },
+  {
+    "term": "идеально",
+    "language": "ru",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Опишите конкретные качества вместо абсолютной похвалы."
+  },
+  {
+    "term": "лучший в мире",
+    "language": "ru",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "Замените на проверяемое сравнение или удалите."
+  }
+]

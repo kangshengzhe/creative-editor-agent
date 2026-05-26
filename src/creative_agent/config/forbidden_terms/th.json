@@ -1,0 +1,86 @@
+[
+  {
+    "term": "การันตีถูกรางวัล",
+    "language": "th",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "หลีกเลี่ยงการรับประกันการถูกรางวัล ใช้ถ้อยคำที่เป็นกลาง"
+  },
+  {
+    "term": "ชนะแน่นอน",
+    "language": "th",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "อย่ารับประกันผลการเดิมพัน ระบุเป็นความบันเทิงแทน"
+  },
+  {
+    "term": "เดิมพันชนะ",
+    "language": "th",
+    "category": "GAMBLING",
+    "severity": "BLOCK",
+    "suggestion": "ไม่ส่งเสริมผลการพนัน ตัดข้อความที่ยืนยันการชนะออก"
+  },
+  {
+    "term": "รักษามะเร็ง",
+    "language": "th",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "หลีกเลี่ยงการอ้างว่ารักษาโรคได้ ใช้ข้อมูลที่มีหลักฐานทางคลินิก"
+  },
+  {
+    "term": "ยาวิเศษ",
+    "language": "th",
+    "category": "MEDICAL_PROMISE",
+    "severity": "BLOCK",
+    "suggestion": "ไม่ใช้คำว่า 'วิเศษ' อธิบายกลไกการทำงานที่ผ่านการพิสูจน์"
+  },
+  {
+    "term": "ปลอดภัย 100%",
+    "language": "th",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "ใช้ 'ออกแบบเพื่อความปลอดภัย' แทนการอ้างว่าปลอดภัยเต็มร้อย"
+  },
+  {
+    "term": "ไม่มีความเสี่ยง",
+    "language": "th",
+    "category": "MISLEADING",
+    "severity": "WARN",
+    "suggestion": "ระบุข้อจำกัดที่ทราบ เช่น 'ความเสี่ยงต่ำเมื่อใช้ตามคำแนะนำ'"
+  },
+  {
+    "term": "วันนี้เท่านั้น",
+    "language": "th",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "ระบุช่วงเวลาที่ชัดเจนของโปรโมชันเพื่อหลีกเลี่ยงความเร่งด่วนเทียม"
+  },
+  {
+    "term": "โอกาสสุดท้าย",
+    "language": "th",
+    "category": "FALSE_URGENCY",
+    "severity": "WARN",
+    "suggestion": "ระบุวันสิ้นสุดที่แท้จริง ไม่ควรอ้างว่าเป็นโอกาสสุดท้ายแบบถาวร"
+  },
+  {
+    "term": "การันตี",
+    "language": "th",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "ใช้ 'มีโอกาสสูง' หรืออ้างอิงข้อมูลที่วัดผลได้"
+  },
+  {
+    "term": "สมบูรณ์แบบ",
+    "language": "th",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "อธิบายคุณสมบัติเฉพาะแทนการใช้คำชมเลิศ"
+  },
+  {
+    "term": "ดีที่สุดตลอดกาล",
+    "language": "th",
+    "category": "EXAGGERATION",
+    "severity": "WARN",
+    "suggestion": "ใช้การเปรียบเทียบที่ตรวจสอบได้แทนคำขั้นสูงสุด"
+  }
+]
