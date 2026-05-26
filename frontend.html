@@ -15,8 +15,8 @@ h1{text-align:center;font-size:28px;margin-bottom:8px;background:linear-gradient
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .form-group{display:flex;flex-direction:column;gap:4px}
 .form-group.full{grid-column:1/-1}
-label{font-size:13px;font-weight:600;color:#475569}
-input,select,textarea{padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;transition:border-color .2s}
+label{font-size:15px;font-weight:600;color:#475569}
+input,select,textarea{padding:12px 14px;border:1px solid #e2e8f0;border-radius:8px;font-size:15px;transition:border-color .2s}
 input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.1)}
 textarea{resize:vertical;min-height:60px}
 .btn{display:block;width:100%;padding:14px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;margin-top:20px;transition:transform .2s,box-shadow .2s}
@@ -36,6 +36,18 @@ textarea{resize:vertical;min-height:60px}
 .score-keyword{background:#dbeafe;color:#2563eb}
 .score-cta{background:#fef3c7;color:#d97706}
 .result-meta{margin-top:8px;font-size:12px;color:#94a3b8}
+/* Market Picker */
+.market-picker{position:relative}
+.market-trigger{padding:12px 14px;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#fff;transition:border-color .2s;font-size:15px}
+.market-trigger:hover{border-color:#6366f1}
+.market-dropdown{display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;min-width:700px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.15);z-index:100;padding:16px;max-height:400px;overflow-y:auto}
+.market-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px}
+.market-col{}
+.market-region{font-size:12px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #e2e8f0}
+.market-item{padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px;transition:background .15s}
+.market-item:hover{background:#eef2ff}
+.market-item.selected{background:#e0e7ff;font-weight:600}
+@media(max-width:800px){.market-dropdown{min-width:auto}.market-grid{grid-template-columns:1fr 1fr}}
 .timer{font-size:13px;color:#94a3b8;text-align:center;margin-top:8px}
 @media(max-width:600px){.form-grid{grid-template-columns:1fr}}
 </style>
@@ -45,7 +57,7 @@ textarea{resize:vertical;min-height:60px}
   <h1>🎨 Creative Editor Agent</h1>
   <p class="subtitle">Coco AI 创意编辑工具 — 输入 Brief，AI 自动生成合规广告文案</p>
 
-  <div class="card">
+  <div class="card" style="margin:0 auto 24px">
     <h2>📝 创意请求 (Brief)</h2>
     <form id="briefForm" class="form-grid">
       <div class="form-group full">
@@ -62,12 +74,75 @@ textarea{resize:vertical;min-height:60px}
       </div>
       <div class="form-group">
         <label>目标市场 *</label>
-        <select id="market">
-          <option value="EN_GLOBAL">英语全球 (EN_GLOBAL)</option>
-          <option value="PH">菲律宾 (PH)</option>
-          <option value="TH">泰国 (TH)</option>
-          <option value="RU">俄罗斯 (RU)</option>
-        </select>
+        <div class="market-picker" id="marketPicker">
+          <div class="market-trigger" id="marketTrigger" onclick="toggleMarketPicker()">
+            <span id="marketLabel">英语全球 (EN_GLOBAL)</span>
+            <span style="color:#94a3b8">▼</span>
+          </div>
+          <div class="market-dropdown" id="marketDropdown">
+            <div class="market-grid">
+              <div class="market-col">
+                <div class="market-region">Asia</div>
+                <div class="market-item" data-value="PH">🇵🇭 菲律宾</div>
+                <div class="market-item" data-value="TH">🇹🇭 泰国</div>
+                <div class="market-item" data-value="VN">🇻🇳 越南</div>
+                <div class="market-item" data-value="ID">🇮🇩 印尼</div>
+                <div class="market-item" data-value="MY">🇲🇾 马来西亚</div>
+                <div class="market-item" data-value="SG">🇸🇬 新加坡</div>
+                <div class="market-item" data-value="KH">🇰🇭 柬埔寨</div>
+                <div class="market-item" data-value="HK">🇭🇰 香港</div>
+                <div class="market-item" data-value="TW">🇹🇼 台湾</div>
+                <div class="market-item" data-value="JP">🇯🇵 日本</div>
+                <div class="market-item" data-value="KR">🇰🇷 韩国</div>
+                <div class="market-item" data-value="IN">🇮🇳 印度</div>
+                <div class="market-item" data-value="PK">🇵🇰 巴基斯坦</div>
+                <div class="market-item" data-value="KZ">🇰🇿 哈萨克斯坦</div>
+              </div>
+              <div class="market-col">
+                <div class="market-region">Middle East</div>
+                <div class="market-item" data-value="SA">🇸🇦 沙特</div>
+                <div class="market-item" data-value="AE">🇦🇪 阿联酋</div>
+                <div class="market-item" data-value="QA">🇶🇦 卡塔尔</div>
+                <div class="market-item" data-value="BH">🇧🇭 巴林</div>
+                <div class="market-item" data-value="KW">🇰🇼 科威特</div>
+                <div class="market-item" data-value="OM">🇴🇲 阿曼</div>
+                <div class="market-region" style="margin-top:12px">Africa</div>
+                <div class="market-item" data-value="EG">🇪🇬 埃及</div>
+                <div class="market-item" data-value="GH">🇬🇭 加纳</div>
+                <div class="market-item" data-value="KE">🇰🇪 肯尼亚</div>
+                <div class="market-item" data-value="NG">🇳🇬 尼日利亚</div>
+                <div class="market-item" data-value="TZ">🇹🇿 坦桑尼亚</div>
+                <div class="market-item" data-value="UG">🇺🇬 乌干达</div>
+              </div>
+              <div class="market-col">
+                <div class="market-region">Americas</div>
+                <div class="market-item" data-value="BR">🇧🇷 巴西</div>
+                <div class="market-item" data-value="MX">🇲🇽 墨西哥</div>
+                <div class="market-item" data-value="CO">🇨🇴 哥伦比亚</div>
+                <div class="market-item" data-value="CL">🇨🇱 智利</div>
+                <div class="market-item" data-value="PE">🇵🇪 秘鲁</div>
+                <div class="market-item" data-value="US">🇺🇸 美国</div>
+                <div class="market-item" data-value="BO">🇧🇴 玻利维亚</div>
+                <div class="market-item" data-value="GT">🇬🇹 危地马拉</div>
+                <div class="market-item" data-value="PY">🇵🇾 巴拉圭</div>
+                <div class="market-item" data-value="CR">🇨🇷 哥斯达黎加</div>
+                <div class="market-item" data-value="DO">🇩🇴 多米尼加</div>
+                <div class="market-item" data-value="EC">🇪🇨 厄瓜多尔</div>
+              </div>
+              <div class="market-col">
+                <div class="market-region">Europe & Other</div>
+                <div class="market-item" data-value="RU">🇷🇺 俄罗斯</div>
+                <div class="market-item" data-value="TR">🇹🇷 土耳其</div>
+                <div class="market-item" data-value="GB">🇬🇧 英国</div>
+                <div class="market-item" data-value="EU">🇪🇺 欧盟</div>
+                <div class="market-item" data-value="AU">🇦🇺 澳大利亚</div>
+                <div class="market-region" style="margin-top:12px">Global</div>
+                <div class="market-item selected" data-value="EN_GLOBAL">🌐 英语全球</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <input type="hidden" id="market" value="EN_GLOBAL">
       </div>
       <div class="form-group">
         <label>文案类型 *</label>
@@ -87,7 +162,9 @@ textarea{resize:vertical;min-height:60px}
         <label>卖点（逗号分隔）</label>
         <input type="text" id="sellingPoints" placeholder="20% bonus, instant credit" value="20% bonus, instant credit">
       </div>
-      <button type="submit" class="btn" id="submitBtn">🚀 生成广告创意</button>
+      <div style="grid-column:1/-1;display:flex;justify-content:center;margin-top:20px">
+        <button type="submit" class="btn" id="submitBtn" style="width:50%;margin:0">🚀 生成广告创意</button>
+      </div>
     </form>
     <div class="status" id="status"></div>
     <div class="timer" id="timer"></div>
@@ -132,10 +209,10 @@ form.addEventListener('submit', async (e) => {
 
   // UI 状态
   submitBtn.disabled = true;
-  submitBtn.textContent = isBatch ? '⏳ 批量生成中（约2-3分钟）...' : '⏳ 生成中...';
+  submitBtn.textContent = isBatch ? '⏳ 批量生成中（约20-30秒）...' : '⏳ 生成中...';
   statusEl.textContent = isBatch
-    ? '正在生成 标题 + 描述 + CTA 三种类型，请耐心等待...'
-    : '正在调用 AI 生成广告创意，请耐心等待（通常 30-120 秒）...';
+    ? '正在生成 标题 + 描述 + CTA 三种类型，预计 20-30 秒...'
+    : '正在调用 AI 生成广告创意，预计 10-20 秒...';
   statusEl.className = 'status';
   resultsCard.style.display = 'none';
   resultsList.innerHTML = '';
@@ -178,7 +255,8 @@ form.addEventListener('submit', async (e) => {
               <div class="result-item" onclick="toggleDetail(this)" style="cursor:pointer;margin-bottom:10px;padding:14px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0">
                 <div style="display:flex;align-items:flex-start;gap:8px">
                   <span class="result-rank" style="width:24px;height:24px;font-size:11px;flex-shrink:0">${i + 1}</span>
-                  <span style="font-size:14px;font-weight:600;line-height:1.4">${escapeHtml(c.source_copy)}</span>
+                  <span style="font-size:14px;font-weight:600;line-height:1.4;flex:1">${escapeHtml(c.source_copy)}</span>
+                  <button onclick="event.stopPropagation();copyText('${escapeHtml(c.source_copy).replace(/'/g, "\\'")}')" style="flex-shrink:0;padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:11px;color:#6366f1" title="复制文案">📋</button>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
                   <span class="score-badge score-composite" style="font-size:11px;padding:3px 8px">综合 ${c.composite_score.toFixed(2)}</span>
@@ -187,9 +265,8 @@ form.addEventListener('submit', async (e) => {
                   <span class="score-badge score-cta" style="font-size:11px;padding:3px 8px">CTA ${c.cta_strength_score.toFixed(2)}</span>
                 </div>
                 <div class="result-detail" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:12px;color:#475569;line-height:1.6">
-                  <div><b>命中:</b> ${c.hit_keywords?.length ? c.hit_keywords.join(', ') : '无'}</div>
-                  <div><b>跳过:</b> ${c.skipped_keywords?.length ? c.skipped_keywords.join(', ') : '无'}</div>
-                  ${Object.keys(c.localized_versions||{}).length ? '<div><b>翻译:</b> ' + Object.entries(c.localized_versions).map(([k,v]) => k + ': ' + escapeHtml(v)).join(' | ') + '</div>' : ''}
+                  ${c.creative_type !== 'CTA' ? '<div><b>命中:</b> ' + (c.hit_keywords?.length ? c.hit_keywords.join(', ') : '无') + '</div><div><b>跳过:</b> ' + (c.skipped_keywords?.length ? c.skipped_keywords.join(', ') : '无') + '</div>' : ''}
+                  ${Object.keys(c.localized_versions||{}).length ? '<div><b>翻译:</b><br>' + Object.entries(c.localized_versions).filter(([k]) => k !== 'en').map(([k,v]) => '<div style="display:flex;align-items:flex-start;gap:8px;margin:4px 0"><span style="flex:1;word-break:break-word"><b>' + k + ':</b> ' + escapeHtml(v) + '</span><button onclick="event.stopPropagation();copyText(\'' + escapeHtml(v).replace(/'/g, "\\'") + '\')" style="flex-shrink:0;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;color:#6366f1" title="复制翻译">📋</button></div>').join('') + '</div>' : ''}
                   ${c.warnings?.length ? '<div style="color:#d97706"><b>⚠️</b> ' + c.warnings.join('; ') + '</div>' : ''}
                 </div>
               </div>
@@ -285,12 +362,42 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const toast = document.createElement('div');
+    toast.textContent = '✅ 已复制';
+    toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#10b981;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;z-index:9999;animation:fadeUp .3s ease';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 1500);
+  });
+}
+
 function toggleDetail(el) {
   const detail = el.querySelector('.result-detail');
   if (detail) {
     detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
   }
 }
+
+// Market Picker
+function toggleMarketPicker() {
+  const dd = document.getElementById('marketDropdown');
+  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+document.querySelectorAll('.market-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.market-item').forEach(i => i.classList.remove('selected'));
+    item.classList.add('selected');
+    document.getElementById('market').value = item.dataset.value;
+    document.getElementById('marketLabel').textContent = item.textContent.trim();
+    document.getElementById('marketDropdown').style.display = 'none';
+  });
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.market-picker')) {
+    document.getElementById('marketDropdown').style.display = 'none';
+  }
+});
 </script>
 </body>
 </html>

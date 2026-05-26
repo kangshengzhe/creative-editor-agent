@@ -100,6 +100,58 @@ _REGISTER_GUIDANCE: dict[Target_Language, str] = {
         "Use formal written Russian. Always use the polite second-person "
         "pronoun 'Вы' (capitalised) when addressing the reader."
     ),
+    Target_Language.VI: (
+        "Use formal written Vietnamese. Use polite pronouns (bạn/quý khách)."
+    ),
+    Target_Language.ID: (
+        "Use formal written Indonesian (Bahasa Indonesia). No slang."
+    ),
+    Target_Language.MS: (
+        "Use formal written Malay (Bahasa Melayu). No colloquialisms."
+    ),
+    Target_Language.KM: (
+        "Use formal written Khmer. Use polite register."
+    ),
+    Target_Language.ZH_HK: (
+        "Use formal written Traditional Chinese (Hong Kong style)."
+    ),
+    Target_Language.ZH_TW: (
+        "Use formal written Traditional Chinese (Taiwan style)."
+    ),
+    Target_Language.JA: (
+        "Use formal written Japanese with です/ます form (desu/masu). "
+        "No casual speech."
+    ),
+    Target_Language.KO: (
+        "Use formal written Korean with 합니다 (hapnida) style honorifics."
+    ),
+    Target_Language.HI: (
+        "Use formal written Hindi. Use आप (aap) for addressing the reader."
+    ),
+    Target_Language.UR: (
+        "Use formal written Urdu. Use آپ (aap) for polite address."
+    ),
+    Target_Language.KK: (
+        "Use formal written Kazakh. Use Сіз (Siz) for polite address."
+    ),
+    Target_Language.AR: (
+        "Use formal written Arabic (Modern Standard Arabic). "
+        "Use أنتم (antum) for polite plural address."
+    ),
+    Target_Language.PT_BR: (
+        "Use formal written Brazilian Portuguese. Use 'você' for address. "
+        "No gírias (slang)."
+    ),
+    Target_Language.ES: (
+        "Use formal written Spanish. Use 'usted' for polite address. "
+        "No slang or regional colloquialisms."
+    ),
+    Target_Language.TR: (
+        "Use formal written Turkish. Use 'siz' for polite address."
+    ),
+    Target_Language.SW: (
+        "Use formal written Swahili. No slang."
+    ),
 }
 
 
@@ -118,9 +170,55 @@ class LocalizerInput:
 # helper because the orchestrator and tests need to derive the language list
 # without instantiating the tool.
 _MARKET_LANGUAGES: dict[Target_Market, list[Target_Language]] = {
+    # Asia
     Target_Market.PH: [Target_Language.FIL, Target_Language.EN],
     Target_Market.TH: [Target_Language.TH, Target_Language.EN],
+    Target_Market.VN: [Target_Language.VI, Target_Language.EN],
+    Target_Market.ID: [Target_Language.ID, Target_Language.EN],
+    Target_Market.MY: [Target_Language.MS, Target_Language.EN],
+    Target_Market.SG: [Target_Language.EN],
+    Target_Market.KH: [Target_Language.KM, Target_Language.EN],
+    Target_Market.HK: [Target_Language.ZH_HK, Target_Language.EN],
+    Target_Market.TW: [Target_Language.ZH_TW, Target_Language.EN],
+    Target_Market.JP: [Target_Language.JA, Target_Language.EN],
+    Target_Market.KR: [Target_Language.KO, Target_Language.EN],
+    Target_Market.IN: [Target_Language.HI, Target_Language.EN],
+    Target_Market.PK: [Target_Language.UR, Target_Language.EN],
+    Target_Market.KZ: [Target_Language.KK, Target_Language.RU, Target_Language.EN],
+    # Middle East
+    Target_Market.SA: [Target_Language.AR, Target_Language.EN],
+    Target_Market.AE: [Target_Language.AR, Target_Language.EN],
+    Target_Market.QA: [Target_Language.AR, Target_Language.EN],
+    Target_Market.BH: [Target_Language.AR, Target_Language.EN],
+    Target_Market.KW: [Target_Language.AR, Target_Language.EN],
+    Target_Market.OM: [Target_Language.AR, Target_Language.EN],
+    # Africa
+    Target_Market.EG: [Target_Language.AR, Target_Language.EN],
+    Target_Market.GH: [Target_Language.EN],
+    Target_Market.KE: [Target_Language.SW, Target_Language.EN],
+    Target_Market.NG: [Target_Language.EN],
+    Target_Market.TZ: [Target_Language.SW, Target_Language.EN],
+    Target_Market.UG: [Target_Language.EN],
+    # Americas
+    Target_Market.BR: [Target_Language.PT_BR, Target_Language.EN],
+    Target_Market.MX: [Target_Language.ES, Target_Language.EN],
+    Target_Market.CO: [Target_Language.ES, Target_Language.EN],
+    Target_Market.CL: [Target_Language.ES, Target_Language.EN],
+    Target_Market.PE: [Target_Language.ES, Target_Language.EN],
+    Target_Market.US: [Target_Language.EN],
+    Target_Market.BO: [Target_Language.ES, Target_Language.EN],
+    Target_Market.GT: [Target_Language.ES, Target_Language.EN],
+    Target_Market.PY: [Target_Language.ES, Target_Language.EN],
+    Target_Market.CR: [Target_Language.ES, Target_Language.EN],
+    Target_Market.DO: [Target_Language.ES, Target_Language.EN],
+    Target_Market.EC: [Target_Language.ES, Target_Language.EN],
+    # Europe & Other
     Target_Market.RU: [Target_Language.RU, Target_Language.EN],
+    Target_Market.TR: [Target_Language.TR, Target_Language.EN],
+    Target_Market.GB: [Target_Language.EN],
+    Target_Market.EU: [Target_Language.EN],
+    Target_Market.AU: [Target_Language.EN],
+    # Global
     Target_Market.EN_GLOBAL: [Target_Language.EN],
 }
 
@@ -142,27 +240,53 @@ def market_to_languages(market: Target_Market) -> list[Target_Language]:
 class LocalizationTool:
     """LLM-backed localization tool with placeholder preservation."""
 
-    #: Market → Language fan-out (Req 4.1 - 4.4).
-    MARKET_LANGUAGES: dict[Target_Market, list[Target_Language]] = {
-        Target_Market.PH: [Target_Language.FIL, Target_Language.EN],
-        Target_Market.TH: [Target_Language.TH, Target_Language.EN],
-        Target_Market.RU: [Target_Language.RU, Target_Language.EN],
-        Target_Market.EN_GLOBAL: [Target_Language.EN],
-    }
+    #: Market → Language fan-out.
+    MARKET_LANGUAGES = _MARKET_LANGUAGES
 
-    #: Currency symbol per market (Req 4.6).
+    #: Currency symbol per market.
     CURRENCY_SYMBOLS: dict[Target_Market, str] = {
-        Target_Market.PH: "₱",
-        Target_Market.TH: "฿",
-        Target_Market.RU: "₽",
+        Target_Market.PH: "₱", Target_Market.TH: "฿", Target_Market.VN: "₫",
+        Target_Market.ID: "Rp", Target_Market.MY: "RM", Target_Market.SG: "S$",
+        Target_Market.KH: "៛", Target_Market.HK: "HK$", Target_Market.TW: "NT$",
+        Target_Market.JP: "¥", Target_Market.KR: "₩", Target_Market.IN: "₹",
+        Target_Market.PK: "₨", Target_Market.KZ: "₸",
+        Target_Market.SA: "﷼", Target_Market.AE: "د.إ", Target_Market.QA: "﷼",
+        Target_Market.BH: "BD", Target_Market.KW: "د.ك", Target_Market.OM: "﷼",
+        Target_Market.EG: "E£", Target_Market.GH: "GH₵", Target_Market.KE: "KSh",
+        Target_Market.NG: "₦", Target_Market.TZ: "TSh", Target_Market.UG: "USh",
+        Target_Market.BR: "R$", Target_Market.MX: "MX$", Target_Market.CO: "COP",
+        Target_Market.CL: "CLP", Target_Market.PE: "S/.", Target_Market.US: "$",
+        Target_Market.BO: "Bs", Target_Market.GT: "Q", Target_Market.PY: "₲",
+        Target_Market.CR: "₡", Target_Market.DO: "RD$", Target_Market.EC: "$",
+        Target_Market.RU: "₽", Target_Market.TR: "₺", Target_Market.GB: "£",
+        Target_Market.EU: "€", Target_Market.AU: "A$",
         Target_Market.EN_GLOBAL: "$",
     }
 
-    #: Date format per market (Req 4.7).
+    #: Date format per market.
     DATE_FORMATS: dict[Target_Market, str] = {
-        Target_Market.PH: "MM/DD/YYYY",
-        Target_Market.TH: "DD/MM/YYYY",
-        Target_Market.RU: "DD.MM.YYYY",
+        Target_Market.PH: "MM/DD/YYYY", Target_Market.TH: "DD/MM/YYYY",
+        Target_Market.VN: "DD/MM/YYYY", Target_Market.ID: "DD/MM/YYYY",
+        Target_Market.MY: "DD/MM/YYYY", Target_Market.SG: "DD/MM/YYYY",
+        Target_Market.KH: "DD/MM/YYYY", Target_Market.HK: "DD/MM/YYYY",
+        Target_Market.TW: "YYYY/MM/DD", Target_Market.JP: "YYYY/MM/DD",
+        Target_Market.KR: "YYYY.MM.DD", Target_Market.IN: "DD/MM/YYYY",
+        Target_Market.PK: "DD/MM/YYYY", Target_Market.KZ: "DD.MM.YYYY",
+        Target_Market.SA: "DD/MM/YYYY", Target_Market.AE: "DD/MM/YYYY",
+        Target_Market.QA: "DD/MM/YYYY", Target_Market.BH: "DD/MM/YYYY",
+        Target_Market.KW: "DD/MM/YYYY", Target_Market.OM: "DD/MM/YYYY",
+        Target_Market.EG: "DD/MM/YYYY", Target_Market.GH: "DD/MM/YYYY",
+        Target_Market.KE: "DD/MM/YYYY", Target_Market.NG: "DD/MM/YYYY",
+        Target_Market.TZ: "DD/MM/YYYY", Target_Market.UG: "DD/MM/YYYY",
+        Target_Market.BR: "DD/MM/YYYY", Target_Market.MX: "DD/MM/YYYY",
+        Target_Market.CO: "DD/MM/YYYY", Target_Market.CL: "DD/MM/YYYY",
+        Target_Market.PE: "DD/MM/YYYY", Target_Market.US: "MM/DD/YYYY",
+        Target_Market.BO: "DD/MM/YYYY", Target_Market.GT: "DD/MM/YYYY",
+        Target_Market.PY: "DD/MM/YYYY", Target_Market.CR: "DD/MM/YYYY",
+        Target_Market.DO: "DD/MM/YYYY", Target_Market.EC: "DD/MM/YYYY",
+        Target_Market.RU: "DD.MM.YYYY", Target_Market.TR: "DD.MM.YYYY",
+        Target_Market.GB: "DD/MM/YYYY", Target_Market.EU: "DD/MM/YYYY",
+        Target_Market.AU: "DD/MM/YYYY",
         Target_Market.EN_GLOBAL: "MM/DD/YYYY",
     }
 
@@ -381,9 +505,9 @@ class LocalizationTool:
         target_market: Target_Market,
     ) -> str:
         """Run one LLM call and restore placeholders. Raises ToolFailureError."""
-        currency_symbol = self.CURRENCY_SYMBOLS[target_market]
-        date_format = self.DATE_FORMATS[target_market]
-        register = _REGISTER_GUIDANCE[target_language]
+        currency_symbol = self.CURRENCY_SYMBOLS.get(target_market, "$")
+        date_format = self.DATE_FORMATS.get(target_market, "DD/MM/YYYY")
+        register = _REGISTER_GUIDANCE.get(target_language, "Use formal written language. No slang.")
         source_lang_value = (
             source_language.value
             if isinstance(source_language, Target_Language)

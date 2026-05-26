@@ -43,6 +43,7 @@ from creative_agent.llm.client import LLMClient
 from creative_agent.models.brief import Creative_Brief
 from creative_agent.models.candidate import Creative_Candidate
 from creative_agent.models.compliance import Compliance_Report
+from creative_agent.models.enums import Creative_Type
 from creative_agent.models.platform_spec import Platform_Spec
 from creative_agent.observability.logging import get_logger
 
@@ -89,7 +90,9 @@ _SYSTEM_PROMPT: str = (
     "5. 禁止包含违禁词或承诺类表述：博彩保证（如 100% win、guaranteed jackpot）、"
     "医疗承诺（如 cure、heal）、虚假紧迫感（如 last chance ever）、"
     "歧视性内容、敏感事件影射等。\n"
-    "6. 使用用户指定的源语言进行输出（默认 English）。"
+    "6. 使用用户指定的源语言进行输出（默认 English）。\n"
+    "7. 【最重要】如果用户指定了 SEO 关键词，每条文案必须自然包含所有关键词。"
+    "不得遗漏任何一个关键词。关键词匹配不区分大小写。"
 )
 
 
@@ -539,11 +542,19 @@ class CreativeGenerator:
             )
 
         if keywords:
-            body += (
-                "\nSEO 关键词参考（按优先级，可融入但不强制）：\n- "
-                + "\n- ".join(keywords)
-                + "\n"
-            )
+            if brief.creative_type == Creative_Type.CTA:
+                body += (
+                    "\nSEO 关键词参考（CTA 类型不强制包含，专注号召力即可）：\n- "
+                    + "\n- ".join(keywords)
+                    + "\n"
+                )
+            else:
+                body += (
+                    "\n【强制要求】以下 SEO 关键词必须出现在每条文案中（大小写不敏感，必须是完全一致的拼写，不要加空格、连字符或变复数）：\n- "
+                    + "\n- ".join(keywords)
+                    + "\n"
+                    + "例如：关键词是 'topup' 就写 'topup'，不要写成 'top up' 或 'top-up' 或 'topups'。\n"
+                )
 
         if excludes:
             preview = excludes[:30]

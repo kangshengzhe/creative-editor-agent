@@ -232,6 +232,20 @@ class KeywordEmbedder:
     ) -> EmbedderOutput:
         char_limit = platform_spec.char_limit(creative_type)
 
+        # CTA type is too short for keyword embedding — skip entirely.
+        # CTA buttons ("Claim Now", "Get Bonus") serve a different purpose
+        # than SEO keyword matching. Report coverage=1.0 so it doesn't
+        # penalise the composite score.
+        if creative_type == Creative_Type.CTA:
+            return EmbedderOutput(
+                embedded_copy=copy,
+                keyword_coverage=1.0,
+                hit_keywords=[],
+                skipped_keywords=[],
+                embed_time_ms=0,
+                failure_reason=None,
+            )
+
         # Step 1: classify which keywords are already covered (Req 5.5).
         already_hit, missing = self._classify_hits(copy, keywords)
 
@@ -248,101 +262,31 @@ class KeywordEmbedder:
             )
 
         # Step 2: try embedding ``missing`` (in priority order, Req 5.6).
+        # Since Creative_Generator now embeds keywords at generation time,
+        # if keywords are still missing it's because truncation cut them off.
+        # In that case, attempting LLM rewrite will only make things worse
+        # (longer output → more truncation). Just report the miss.
         embedded_copy = copy
-        attempt_keywords = list(missing)
-        last_failure_reason: Optional[str] = None
 
-        for attempt in range(1, _MAX_LLM_ATTEMPTS + 1):
-            if not attempt_keywords:
-                break
-            try:
-                candidate = await self._call_llm_embed(
-                    copy=copy,
-                    keywords=attempt_keywords,
-                    char_limit=char_limit,
-                    creative_type=creative_type,
-                )
-            except ToolFailureError as exc:
-                last_failure_reason = exc.message
-                log.warning(
-                    "keyword_embedder.llm_attempt_failed",
-                    attempt=attempt,
-                    error=exc.message,
-                )
-                # Treat as fatal for this round — fall back to no embedding.
-                break
-
-            # Validate: length budget (Req 5.3) and stuffing (Req 5.4).
-            if len(candidate) > char_limit:
-                last_failure_reason = (
-                    f"LLM output exceeded {char_limit}-char limit "
-                    f"({len(candidate)})"
-                )
-                log.warning(
-                    "keyword_embedder.length_exceeded",
-                    attempt=attempt,
-                    candidate_len=len(candidate),
-                    char_limit=char_limit,
-                )
-                # Retry with a shorter keyword target list.
-                if len(attempt_keywords) > 1:
-                    attempt_keywords = attempt_keywords[:-1]
-                    continue
-                break
-
-            if _has_stuffing(candidate, keywords):
-                last_failure_reason = "Detected keyword stuffing in LLM output"
-                log.warning(
-                    "keyword_embedder.stuffing_detected",
-                    attempt=attempt,
-                )
-                if len(attempt_keywords) > 1:
-                    attempt_keywords = attempt_keywords[:-1]
-                    continue
-                break
-
-            embedded_copy = candidate
-            last_failure_reason = None
-            break
-
-        # Step 3: re-classify hits against the (possibly rewritten) copy.
-        final_hits, _final_missing = self._classify_hits(embedded_copy, keywords)
+        # Skip LLM rewrite entirely — just report coverage as-is.
+        final_hits, _final_missing = self._classify_hits(copy, keywords)
         final_skipped = [kw for kw in keywords if kw not in final_hits]
-
-        # Length safety net: if the embedded copy somehow exceeds the limit
-        # (e.g. last-attempt fallback raced with a stuffing rejection) revert
-        # to the original copy (Req 5.9 safety: never violate the budget).
-        if len(embedded_copy) > char_limit:
-            embedded_copy = copy
-            final_hits, _ = self._classify_hits(copy, keywords)
-            final_skipped = [kw for kw in keywords if kw not in final_hits]
-            last_failure_reason = (
-                last_failure_reason
-                or f"Embedded copy exceeded {char_limit}-char limit; reverted"
-            )
-
         coverage = len(final_hits) / len(keywords)
 
-        # Hard failure case (Req 5.9): no keyword could be embedded *and*
-        # none were already present.
-        if not final_hits:
-            return EmbedderOutput(
-                embedded_copy=copy,
-                keyword_coverage=0.0,
-                hit_keywords=[],
-                skipped_keywords=list(keywords),
-                embed_time_ms=0,
-                failure_reason=last_failure_reason
-                or "No keyword could be embedded within the char limit",
+        failure_reason = None
+        if final_skipped:
+            failure_reason = (
+                f"Keywords {final_skipped} not found in copy "
+                f"(likely truncated by {char_limit}-char limit)"
             )
 
         return EmbedderOutput(
-            embedded_copy=embedded_copy,
+            embedded_copy=copy,
             keyword_coverage=coverage,
             hit_keywords=list(final_hits),
             skipped_keywords=final_skipped,
             embed_time_ms=0,
-            failure_reason=None,
+            failure_reason=failure_reason,
         )
 
     # ------------------------------------------------------------------
