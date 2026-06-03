@@ -13,6 +13,7 @@ from .candidate import (
     FailedLanguage,
 )
 from .compliance import Compliance_Report, Violation
+from .diversity_config import SemanticDiversityConfig
 from .enums import (
     Compliance_Severity,
     Creative_Type,
@@ -44,4 +45,6 @@ __all__ = [
     "Creative_Candidate",
     # Ranking
     "AB_Ranking",
+    # Diversity configuration
+    "SemanticDiversityConfig",
 ]

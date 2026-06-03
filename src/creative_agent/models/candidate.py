@@ -141,6 +141,40 @@ class Creative_Candidate(BaseModel):
         ),
     )
 
+    # --- Localization & diversity metadata --------------------------------
+    angle_label: str | None = Field(
+        default=None,
+        description=(
+            "Creative angle this candidate was generated for, assigned by "
+            "Angle_Splitter / round-robin generation (requirement 3.6). "
+            "``None`` when angle-based generation was not used."
+        ),
+    )
+    generation_language: str = Field(
+        default="en",
+        description=(
+            "Language the candidate copy was generated in; ``en`` for the "
+            "standard English flow, otherwise the target market's primary "
+            "language for native generation (requirement 1.1)."
+        ),
+    )
+    display_width: int | None = Field(
+        default=None,
+        description=(
+            "Display_Unit width of the copy as computed by "
+            "Display_Width_Calculator (requirement 4.8). ``None`` until "
+            "display-width enforcement runs."
+        ),
+    )
+    semantic_embedding: list[float] | None = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "Sentence-embedding vector used by Semantic_Diversity_Checker "
+            "(requirement 2.1). Excluded from serialization."
+        ),
+    )
+
     # --- Routing metadata --------------------------------------------------
     target_platform: Target_Platform = Field(
         ..., description="Target ad platform for this candidate."

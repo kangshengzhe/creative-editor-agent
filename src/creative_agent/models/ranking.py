@@ -70,6 +70,34 @@ class AB_Ranking(BaseModel):
         description="Request-level warnings (e.g. keyword truncation "
         "from requirement 1.6, partial-language failures, etc.).",
     )
+    angle_distribution: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Mapping of each angle label to the number of candidates "
+            "generated for that angle (requirement 3.6). Empty when "
+            "angle-based generation was not used."
+        ),
+    )
+    diversity_multiplier: float = Field(
+        default=1.0,
+        description=(
+            "Applied diversity multiplier for the candidate set: "
+            "``1.0 + 0.05 * (distinct_angles - 1)``, capped at a maximum "
+            "of 1.25 (requirement 3.7). Defaults to 1.0 when no diversity "
+            "bonus applies."
+        ),
+    )
+    target_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Ad_Group_Quota target for this request's creative_type "
+            "(requirement 5.7): HEADLINE=15, DESCRIPTION=10, CTA=5, "
+            "LONG_COPY=5, or the brief's explicit override. Lets consumers "
+            "detect under-fill by comparing against ``len(ranked_candidates)``. "
+            "Defaults to 0 for callers that do not set it."
+        ),
+    )
 
 
 __all__ = ["AB_Ranking"]
