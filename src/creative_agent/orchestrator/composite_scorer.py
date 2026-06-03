@@ -39,7 +39,12 @@ from creative_agent.models import (
 )
 from creative_agent.observability.logging import get_logger
 
-__all__ = ["compute_composite_score", "rank_candidates"]
+__all__ = [
+    "compute_composite_score",
+    "compute_angle_distribution",
+    "compute_diversity_multiplier",
+    "rank_candidates",
+]
 
 log = get_logger(__name__)
 
@@ -101,6 +106,66 @@ def _has_block(candidate: Creative_Candidate) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Diversity multiplier & angle distribution (Requirements 3.6, 3.7)
+# ---------------------------------------------------------------------------
+
+# Per Requirement 3.7 the multiplier grows by 0.05 for each distinct angle
+# beyond the first and is capped at 1.25 (the cap is reached at 6 distinct
+# angles). Property 9 verifies the exact formula.
+_DIVERSITY_STEP: float = 0.05
+_DIVERSITY_CAP: float = 1.25
+
+
+def compute_angle_distribution(
+    candidates: list[Creative_Candidate],
+) -> dict[str, int]:
+    """Return a mapping of angle label → candidate count (Requirement 3.6).
+
+    Only candidates carrying a non-null ``angle_label`` contribute. When no
+    candidate has an angle label the mapping is empty, signalling that
+    angle-based generation was not used (existing behaviour is preserved).
+
+    Args:
+        candidates: The candidate set whose angle labels are tallied.
+
+    Returns:
+        ``{angle_label: count}`` for every distinct non-null label present.
+    """
+    distribution: dict[str, int] = {}
+    for candidate in candidates:
+        label = candidate.angle_label
+        if label is None:
+            continue
+        distribution[label] = distribution.get(label, 0) + 1
+    return distribution
+
+
+def compute_diversity_multiplier(distinct_angles: int) -> float:
+    """Return the diversity multiplier for ``distinct_angles`` (Req 3.7).
+
+    Formula::
+
+        min(1.0 + 0.05 * (distinct_angles - 1), 1.25)
+
+    When there are zero distinct angles (angle-based generation was not
+    used) the multiplier is 1.0, leaving composite scores unchanged.
+
+    Args:
+        distinct_angles: Number of distinct non-null angle labels covered
+            by the candidate set.
+
+    Returns:
+        The diversity multiplier in ``[1.0, 1.25]``.
+    """
+    if distinct_angles <= 0:
+        return 1.0
+    multiplier = 1.0 + _DIVERSITY_STEP * (distinct_angles - 1)
+    if multiplier > _DIVERSITY_CAP:
+        return _DIVERSITY_CAP
+    return multiplier
+
+
+# ---------------------------------------------------------------------------
 # Ranking (Requirements 7.1, 7.3, 7.4, 7.5, 7.8)
 # ---------------------------------------------------------------------------
 
@@ -113,6 +178,7 @@ def rank_candidates(
     warnings: Optional[list[str]] = None,
     brief_summary: Optional[dict[str, Any]] = None,
     total_generated: Optional[int] = None,
+    target_count: int = 0,
 ) -> AB_Ranking:
     """Filter, score, sort and package candidates into an :class:`AB_Ranking`.
 
@@ -163,7 +229,7 @@ def rank_candidates(
         c for c in candidates if not _has_block(c)
     ]
 
-    # Inject the composite score onto each survivor.
+    # Inject the base composite score onto each survivor.
     for candidate in survivors:
         candidate.composite_score = compute_composite_score(candidate)
 
@@ -176,7 +242,50 @@ def rank_candidates(
         )
     )
 
-    filtered_out = pre_filter_count - len(survivors)
+    # ------------------------------------------------------------------
+    # Ad-group quota truncation (Requirement 5 / platform cap)
+    # ------------------------------------------------------------------
+    # Angle-based generation produces candidates in batches of 3 per angle,
+    # so the surviving count often overshoots the Target_Count (e.g. 6 angles
+    # x 3 = 18 for a 15-headline target). Google Ads RSA ad groups cap at 15
+    # headlines / 10 descriptions, so we keep only the highest-scoring
+    # ``target_count`` candidates — the surplus served as an optimise-then-
+    # select pool. ``target_count == 0`` (callers that don't set it) disables
+    # truncation, preserving the prior return-everything behaviour.
+    overshoot = 0
+    if target_count > 0 and len(survivors) > target_count:
+        overshoot = len(survivors) - target_count
+        survivors = survivors[:target_count]
+
+    # ------------------------------------------------------------------
+    # Diversity bonus (Requirements 3.6, 3.7)
+    # ------------------------------------------------------------------
+    # Tally the angle labels present in the surviving set and derive the
+    # uniform diversity multiplier. The multiplier is applied *after*
+    # sorting: because it is a single positive factor shared by every
+    # survivor it preserves the relative ordering established above, so
+    # the ranked order is unaffected while each reported ``composite_score``
+    # reflects the diversity bonus. When no candidate carries an angle
+    # label the distribution is empty and the multiplier is 1.0, leaving
+    # existing (non-angle) behaviour completely intact. Computed on the
+    # post-truncation set so the reported distribution matches what is
+    # actually delivered.
+    angle_distribution = compute_angle_distribution(survivors)
+    distinct_angles = len(angle_distribution)
+    diversity_multiplier = compute_diversity_multiplier(distinct_angles)
+
+    if diversity_multiplier != 1.0:
+        for candidate in survivors:
+            boosted = candidate.composite_score * diversity_multiplier
+            # ``composite_score`` is constrained to [0, 1]; clamp before
+            # assignment so ``validate_assignment=True`` cannot reject the
+            # boosted value.
+            candidate.composite_score = boosted if boosted < 1.0 else 1.0
+
+    # ``filtered_out`` counts only BLOCK-violation drops (Requirement 7.5).
+    # Add back ``overshoot`` so the quota truncation above is not miscounted
+    # as compliance filtering: (generated - delivered) - quota_trimmed.
+    filtered_out = pre_filter_count - len(survivors) - overshoot
     if filtered_out < 0:
         # Defensive: caller passed an inconsistent ``total_generated``
         # (e.g. a number smaller than the candidates list). Clamp to
@@ -193,6 +302,9 @@ def rank_candidates(
         generation_time_ms=generation_time_ms,
         refill_count=refill_count,
         warnings=list(warnings) if warnings else [],
+        angle_distribution=angle_distribution,
+        diversity_multiplier=diversity_multiplier,
+        target_count=target_count,
     )
 
     log.info(
@@ -201,6 +313,10 @@ def rank_candidates(
         total_generated=pre_filter_count,
         ranked_count=len(survivors),
         filtered_out=filtered_out,
+        truncated_overshoot=overshoot,
+        target_count=target_count,
         refill_count=refill_count,
+        distinct_angles=distinct_angles,
+        diversity_multiplier=diversity_multiplier,
     )
     return ranking

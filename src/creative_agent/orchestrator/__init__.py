@@ -9,7 +9,9 @@ Currently implemented:
 """
 
 from creative_agent.orchestrator.composite_scorer import (
+    compute_angle_distribution,
     compute_composite_score,
+    compute_diversity_multiplier,
     rank_candidates,
 )
 from creative_agent.orchestrator.orchestrator import Orchestrator
@@ -21,7 +23,9 @@ from creative_agent.orchestrator.pipeline import (
 __all__ = [
     "Orchestrator",
     "PipelineDeps",
+    "compute_angle_distribution",
     "compute_composite_score",
+    "compute_diversity_multiplier",
     "process_candidate",
     "rank_candidates",
 ]

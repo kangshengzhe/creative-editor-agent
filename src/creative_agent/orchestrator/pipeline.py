@@ -55,6 +55,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from creative_agent.errors import ToolFailureError
+from creative_agent.integration.display_width import DisplayWidthCalculator
+from creative_agent.integration.language_prompts import LanguagePromptSelector
 from creative_agent.models import (
     Creative_Brief,
     Creative_Candidate,
@@ -62,6 +64,7 @@ from creative_agent.models import (
 )
 from creative_agent.models.platform_spec import Platform_Spec
 from creative_agent.observability.logging import get_logger
+from creative_agent.tools.localization_tool import market_to_languages
 
 if TYPE_CHECKING:
     from creative_agent.tools.compliance_checker import ComplianceChecker
@@ -72,6 +75,19 @@ if TYPE_CHECKING:
 __all__ = ["PipelineDeps", "process_candidate"]
 
 log = get_logger(__name__)
+
+# Stateless selector used to resolve a market's primary language so we can
+# skip redundant translation when the brief's source language already matches
+# it (Requirement 1.4). Held as a module-level singleton because it carries no
+# per-request state.
+_LANGUAGE_PROMPT_SELECTOR = LanguagePromptSelector()
+
+# Stateless Display_Width_Calculator singleton (Req 4.8 / 4.10). Used to keep a
+# candidate's ``display_width`` in sync with its ``source_copy`` after the
+# keyword-embed stage rewrites the copy — for CJK copy the rewrite changes the
+# Display_Unit count, so the value the generator stamped at construction time
+# would otherwise be stale.
+_DISPLAY_WIDTH = DisplayWidthCalculator()
 
 
 # Allow-list of language codes the source can carry without forcing us to
@@ -270,8 +286,46 @@ async def _run_localization(
     candidate_id: str,
     source_lang: Target_Language,
 ) -> None:
-    """Translate the candidate into every language the target market needs."""
+    """Translate the candidate into every language the target market needs.
+
+    When ``brief.source_language`` matches the target market's primary
+    language, the translate step for that language is skipped — the source
+    copy is already native in that language, so re-translating it would be
+    redundant (Requirement 1.4). The remaining market languages are still
+    translated. When *no* languages remain after the skip (e.g. an
+    English-only market with an English source), the translate call is
+    bypassed entirely.
+    """
     start = time.perf_counter()
+
+    # Decide which languages still need translation after removing any
+    # language that is redundant with the source language (Req 1.4).
+    target_languages, skipped_language = _resolve_target_languages(brief=brief)
+
+    if skipped_language is not None:
+        log.info(
+            "pipeline.localization.skip_redundant",
+            request_id=deps.request_id,
+            candidate_id=candidate_id,
+            tool_name="Localization_Tool",
+            target_market=brief.target_market.value,
+            language=skipped_language,
+        )
+
+    # Nothing left to translate — skip the tool call entirely (Req 1.4).
+    if target_languages is not None and not target_languages:
+        candidate.localized_versions = {}
+        candidate.failed_languages = []
+        log.info(
+            "pipeline.localization.skipped",
+            request_id=deps.request_id,
+            candidate_id=candidate_id,
+            tool_name="Localization_Tool",
+            target_market=brief.target_market.value,
+            reason="source_language matches the market's only language",
+        )
+        return
+
     log.info(
         "pipeline.localization.start",
         request_id=deps.request_id,
@@ -283,7 +337,7 @@ async def _run_localization(
         result = await deps.localization_tool.translate(
             candidate.source_copy,
             source_language=source_lang,
-            target_languages=None,  # derive from target_market
+            target_languages=target_languages,  # None ⇒ derive from market
             target_market=brief.target_market,
         )
     except ToolFailureError as exc:
@@ -406,6 +460,10 @@ async def _run_keyword_embed(
     # Replace source_copy with the embedded version so the recheck +
     # CTA_Optimizer run on the final wording (design.md § Architecture).
     candidate.source_copy = result.embedded_copy
+    # The embedded copy may differ in length from the generated copy; refresh
+    # the Display_Unit count so ``display_width`` stays accurate for CJK copy
+    # whose Display_Unit count is not equal to ``len()`` (Req 4.8).
+    candidate.display_width = _DISPLAY_WIDTH.text_width(result.embedded_copy)
     candidate.keyword_coverage = result.keyword_coverage
     candidate.hit_keywords = list(result.hit_keywords)
     candidate.skipped_keywords = list(result.skipped_keywords)
@@ -597,6 +655,58 @@ def _resolve_source_language(value: object) -> Target_Language:
             except ValueError:
                 pass
     return Target_Language.EN
+
+
+def _resolve_target_languages(
+    *, brief: Creative_Brief
+) -> tuple[Optional[list[Target_Language]], Optional[str]]:
+    """Decide which languages the localization step should translate into.
+
+    Implements the Requirement 1.4 skip: when ``brief.source_language`` equals
+    the target market's primary language, the copy is already native in that
+    language, so translating it again is redundant. Returns a
+    ``(target_languages, skipped_language)`` tuple:
+
+    * ``target_languages is None`` — pass ``None`` to
+      ``LocalizationTool.translate`` so it derives the full language list from
+      the market (the unchanged, pre-1.4 behaviour). Happens when the source
+      language does *not* match the primary language, or when the market is
+      unknown (defensive: never skip).
+    * ``target_languages == []`` — every language the market needs *is* the
+      source language; nothing remains to translate and the caller should
+      skip the tool call entirely.
+    * ``target_languages == [...]`` — the explicit remaining languages after
+      removing the redundant source/primary language.
+
+    ``skipped_language`` is the language code that was removed (for logging),
+    or ``None`` when nothing was skipped.
+    """
+    try:
+        primary = _LANGUAGE_PROMPT_SELECTOR.get_primary_language(brief.target_market)
+    except KeyError:
+        # Unknown market — do not skip; preserve existing behaviour (the 1.4
+        # skip only triggers on a known primary-language match).
+        return None, None
+
+    source_lang = (brief.source_language or "").strip().lower()
+    if not source_lang or source_lang != primary.strip().lower():
+        # Source language does not match the market's primary language —
+        # translate every market language exactly as before.
+        return None, None
+
+    # Source language matches the market's primary language: skip translating
+    # into that language (Req 1.4) and translate only the remaining ones.
+    try:
+        market_languages = market_to_languages(brief.target_market)
+    except KeyError:  # pragma: no cover — guarded by get_primary_language above
+        return None, None
+
+    remaining = [
+        lang
+        for lang in market_languages
+        if lang.value.strip().lower() != source_lang
+    ]
+    return remaining, primary
 
 
 def _looks_degraded(report: object) -> bool:

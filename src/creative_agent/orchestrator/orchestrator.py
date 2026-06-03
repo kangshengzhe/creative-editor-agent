@@ -47,6 +47,10 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from creative_agent.config import load_platform_spec
+from creative_agent.config.ad_group_quota import (
+    MIN_COMPLIANT_FLOOR,
+    target_count_for,
+)
 from creative_agent.errors import (
     CascadeFailureError,
     DegradedFailureError,
@@ -64,6 +68,10 @@ from creative_agent.orchestrator.composite_scorer import rank_candidates
 from creative_agent.orchestrator.pipeline import PipelineDeps, process_candidate
 
 if TYPE_CHECKING:
+    from creative_agent.integration.semantic_diversity import (
+        SemanticDiversityChecker,
+    )
+    from creative_agent.integration.keyword_localizer import KeywordLocalizer
     from creative_agent.models.platform_spec import Platform_Spec
     from creative_agent.tools.compliance_checker import ComplianceChecker
     from creative_agent.tools.creative_generator import CreativeGenerator
@@ -84,9 +92,20 @@ _CASCADE_FAILURE_THRESHOLD: int = 30
 # two refill rounds = three rounds in total.
 _MAX_ROUNDS: int = 3
 
-# Minimum compliant candidates we must surface in the AB_Ranking
-# (Requirement 7.6 / 7.7).
-_MIN_COMPLIANT_CANDIDATES: int = 3
+# Minimum compliant candidates we must surface in the AB_Ranking — the hard
+# viability floor (Requirement 7.6 / 7.7, and Requirement 5.6). Falling below
+# this after all refill rounds is a degraded failure. The per-request
+# Target_Count (Requirement 5.1) is typically higher (e.g. 15 for HEADLINE);
+# landing between this floor and the target yields a warning, not a failure.
+_MIN_COMPLIANT_CANDIDATES: int = MIN_COMPLIANT_FLOOR
+
+
+# Request-level warning appended (at most once) when the
+# Semantic_Diversity_Checker degrades to text-dedup only because the embedding
+# model was unavailable or timed out (Requirement 2.8).
+_SEMANTIC_FALLBACK_WARNING: str = (
+    "semantic diversity degraded to text-dedup only"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +128,13 @@ class Orchestrator:
         platform_loader: Optional override for ``load_platform_spec``. The
             production path uses the bundled JSON configs; tests inject a
             fixture lookup.
+        semantic_diversity_checker: Optional
+            :class:`SemanticDiversityChecker` (Req 2.5 / 2.7 / 2.8 / 2.9).
+            When provided, freshly generated candidates are filtered for
+            semantic duplicates (after the generator's text-based dedup and
+            before the compliance pipeline) against the pool of all
+            candidates accepted across every refill round. When ``None`` the
+            semantic step is skipped entirely and behaviour is unchanged.
     """
 
     def __init__(
@@ -120,6 +146,8 @@ class Orchestrator:
         cta_optimizer: "CTAOptimizer",
         platform_loader: Optional[Callable[[Any], "Platform_Spec"]] = None,
         trace_recorder: Optional[TraceRecorder] = None,
+        semantic_diversity_checker: Optional["SemanticDiversityChecker"] = None,
+        keyword_localizer: Optional["KeywordLocalizer"] = None,
     ) -> None:
         self._creative_generator = creative_generator
         self._compliance_checker = compliance_checker
@@ -128,6 +156,12 @@ class Orchestrator:
         self._cta_optimizer = cta_optimizer
         self._platform_loader = platform_loader or load_platform_spec
         self._trace = trace_recorder or TraceRecorder()
+        self._semantic_diversity_checker = semantic_diversity_checker
+        # Optional: localizes generic SEO keywords into the market's language
+        # (brand/proper nouns kept verbatim) so keywords don't stay English in
+        # non-English copy. When None, keywords are used as-supplied (prior
+        # behaviour) and all existing construction sites keep working.
+        self._keyword_localizer = keyword_localizer
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -164,6 +198,47 @@ class Orchestrator:
         # Start tracing this request
         self._trace.start_request(request_id, brief=brief)
 
+        # --- Keyword localization (PPC best practice) ---------------------
+        # Generic SEO keywords (e.g. "topup") should appear in the market's
+        # language ("recarga" for Spanish), while brand/proper nouns stay
+        # verbatim. We localize ONCE here and replace brief.keywords, so both
+        # generation and the keyword-embedder validation use the localized
+        # terms (otherwise the embedder would reject localized copy for not
+        # containing the English keyword). No-op for English markets or when no
+        # localizer is wired; failures degrade to the original keywords.
+        if self._keyword_localizer is not None and brief.keywords:
+            try:
+                from creative_agent.integration.language_prompts import (
+                    LanguagePromptSelector,
+                )
+
+                primary_language = LanguagePromptSelector().get_primary_language(
+                    brief.target_market
+                )
+            except KeyError:
+                primary_language = "en"
+
+            if primary_language != "en":
+                mapping = await self._keyword_localizer.localize(
+                    list(brief.keywords),
+                    primary_language,
+                    request_id=request_id,
+                )
+                localized_keywords = [mapping.get(k, k) for k in brief.keywords]
+                if localized_keywords != list(brief.keywords):
+                    changed = {
+                        k: v for k, v in mapping.items() if k != v
+                    }
+                    log.info(
+                        "orchestrator.keywords_localized",
+                        request_id=request_id,
+                        target_language=primary_language,
+                        changed=changed,
+                    )
+                    # Replace on a copy so the original brief is not mutated
+                    # for the caller / trace.
+                    brief = brief.model_copy(update={"keywords": localized_keywords})
+
         tool_failure_counter: list[int] = [0]
         pipeline_deps = PipelineDeps(
             compliance_checker=self._compliance_checker,
@@ -179,6 +254,55 @@ class Orchestrator:
         refill_count = 0
         start_time = time.perf_counter()
 
+        # Semantic-diversity state, maintained across *all* refill rounds
+        # (Req 2.9). ``semantic_accepted_pool`` holds the source copies of every
+        # candidate accepted by the semantic check so far (captured *before* the
+        # keyword-embedding pipeline mutates ``source_copy``).
+        # ``semantic_rejected_copies`` holds copies rejected as semantic
+        # duplicates so they are fed back into the generator's ``exclude`` set
+        # and not regenerated. ``semantic_fallback_warned`` ensures the
+        # text-dedup-only warning is appended at most once per request (Req 2.8).
+        semantic_enabled = self._semantic_diversity_checker is not None
+        semantic_accepted_pool: list[str] = []
+        semantic_rejected_copies: list[str] = []
+        # Quality-ordered backfill pool: candidates the semantic checker judged
+        # near-duplicates. Used only if diverse generation can't reach the
+        # ad-group quota, so the delivered count is always exactly the target
+        # (business hard requirement) while still preferring diverse copy.
+        semantic_reserve: list[Creative_Candidate] = []
+        semantic_fallback_warned = False
+
+        # Mutable warning list surfaced on the AB_Ranking output. Seeded from
+        # the caller's warnings so angle-decomposition-failure warnings
+        # (Req 3.8) accumulate alongside any gateway-level warnings.
+        request_warnings: list[str] = list(warnings) if warnings else []
+
+        # Whether the wired Creative_Generator can do angle-based round-robin
+        # generation (an Angle_Splitter is injected). When False the
+        # orchestrator uses the existing single-prompt generate() path
+        # unchanged (Req 3.8 default).
+        use_angle_generation = getattr(
+            self._creative_generator, "supports_angle_generation", False
+        )
+
+        # Per-request Target_Count from the Ad_Group_Quota (Requirement 5.1):
+        # HEADLINE=15, DESCRIPTION=10, CTA=5, LONG_COPY=5. An explicit
+        # ``brief.target_count`` overrides the default (Requirement 5.8). This
+        # single value drives generation (min_count) and is reported on the
+        # AB_Ranking output (Requirement 5.7).
+        target_count = brief.target_count or target_count_for(brief.creative_type)
+
+        # Generation overshoot (Req 5 robustness): semantic-diversity dedup and
+        # compliance filtering remove some candidates after generation, so if we
+        # only generated exactly ``target_count`` we'd routinely land short of
+        # the ad-group quota. We therefore ask the generator for ~1.7x the
+        # target per round (rounded up). The surplus is cheap because angle
+        # calls run concurrently, and the final set is truncated back to exactly
+        # ``target_count`` by the ranker. Capped so a huge custom target can't
+        # explode the call budget.
+        import math as _math
+        generation_target = min(int(_math.ceil(target_count * 1.7)), target_count + 20)
+
         log.info(
             "orchestrator.start",
             request_id=request_id,
@@ -186,22 +310,48 @@ class Orchestrator:
             target_market=brief.target_market.value,
             creative_type=brief.creative_type.value,
             keyword_count=len(brief.keywords or []),
+            target_count=target_count,
         )
 
         for refill_round in range(_MAX_ROUNDS):
             # ------------------------------------------------------------------
             # Stage A: generate candidates
             # ------------------------------------------------------------------
+            # Exclude both the copies we have already processed *and* any copies
+            # rejected as semantic duplicates this request, so the generator's
+            # refill loop replaces them rather than regenerating them (Req 2.5).
             exclude = [c.source_copy for c in all_processed]
-            try:
-                gen_output = await self._creative_generator.generate(
-                    brief=brief,
-                    platform_spec=platform_spec,
-                    exclude_copies=exclude,
-                    min_count=5,
-                    request_id=request_id,
-                    tool_failure_counter=tool_failure_counter,
+            exclude.extend(semantic_rejected_copies)
+            # Operator "常换常新" inputs: previously-delivered copies the caller
+            # wants this run to avoid, so a re-run yields fresh variants (Req 6).
+            if brief.regenerate_avoid:
+                exclude.extend(
+                    s for s in brief.regenerate_avoid if s and s.strip()
                 )
+            try:
+                if use_angle_generation:
+                    # Accumulate per-angle accepted counts across refill rounds
+                    # so lowest-count cycling stays balanced (Req 3.5).
+                    accepted_angle_counts = _accepted_angle_counts(all_processed)
+                    gen_output = await self._creative_generator.generate_with_angles(
+                        brief=brief,
+                        platform_spec=platform_spec,
+                        exclude_copies=exclude,
+                        min_count=generation_target,
+                        request_id=request_id,
+                        tool_failure_counter=tool_failure_counter,
+                        warnings=request_warnings,
+                        accepted_angle_counts=accepted_angle_counts,
+                    )
+                else:
+                    gen_output = await self._creative_generator.generate(
+                        brief=brief,
+                        platform_spec=platform_spec,
+                        exclude_copies=exclude,
+                        min_count=generation_target,
+                        request_id=request_id,
+                        tool_failure_counter=tool_failure_counter,
+                    )
             except GenerationFailureError as exc:
                 # First-round generation failure is fatal (Req 9.1).
                 if refill_round == 0:
@@ -246,13 +396,37 @@ class Orchestrator:
             self._check_cascade(tool_failure_counter[0], request_id)
 
             # ------------------------------------------------------------------
+            # Stage A.5: semantic-diversity filtering (Req 2.5 / 2.7 / 2.8 / 2.9)
+            # ------------------------------------------------------------------
+            # Runs AFTER the generator's text-based dedup and BEFORE the
+            # per-candidate compliance pipeline (Req 2.7). Freshly generated
+            # candidates are checked against the pool of source copies accepted
+            # across *all* refill rounds (Req 2.9); rejected candidates are
+            # dropped (and fed back into the generator's ``exclude`` set so the
+            # refill loop replaces them, Req 2.5). When no checker is injected
+            # the step is skipped entirely and behaviour is unchanged.
+            candidates_to_process = gen_output.candidates
+            if semantic_enabled and gen_output.candidates:
+                candidates_to_process, semantic_fallback_warned = (
+                    await self._filter_semantic_diversity(
+                        gen_output.candidates,
+                        accepted_pool=semantic_accepted_pool,
+                        rejected_copies=semantic_rejected_copies,
+                        reserve=semantic_reserve,
+                        request_warnings=request_warnings,
+                        fallback_warned=semantic_fallback_warned,
+                        request_id=request_id,
+                    )
+                )
+
+            # ------------------------------------------------------------------
             # Stage B: per-candidate pipeline (parallel fan-out)
             # ------------------------------------------------------------------
-            if gen_output.candidates:
+            if candidates_to_process:
                 processed = await asyncio.gather(
                     *[
                         process_candidate(c, brief, platform_spec, pipeline_deps)
-                        for c in gen_output.candidates
+                        for c in candidates_to_process
                     ]
                 )
                 all_processed.extend(processed)
@@ -273,17 +447,59 @@ class Orchestrator:
                 tool_failures=tool_failure_counter[0],
             )
 
-            # We have enough compliant candidates — exit the loop.
-            if compliant_count >= _MIN_COMPLIANT_CANDIDATES:
+            # We have reached the per-type Target_Count (Requirement 5.2) —
+            # the ad group can be fully filled, so stop refilling.
+            if compliant_count >= target_count:
                 break
 
-            # Otherwise count this as a refill attempt (rounds 1..N-1 are
-            # refills; round 0 is the initial attempt). The post-loop check
-            # below decides whether to raise DegradedFailureError.
-            refill_count = refill_round + 1
+            # Otherwise record how many *refill* rounds have been executed so
+            # far. Round 0 is the initial run (not a refill); rounds 1 and 2
+            # are refills. ``refill_count`` therefore equals ``refill_round``
+            # and is capped at 2 to satisfy the AB_Ranking ``le=2`` constraint
+            # (Requirement 7.6: 1 initial + up to 2 refills).
+            refill_count = min(refill_round + 1, _MAX_ROUNDS - 1)
 
         # ----------------------------------------------------------------------
-        # Stage C: degraded-failure check (Req 7.7)
+        # Stage B.5: quota backfill from the semantic reserve (Req 5 hard count)
+        # ----------------------------------------------------------------------
+        # If diversified generation fell short of the ad-group quota, top up
+        # from the near-duplicate reserve (best-scoring first) so the delivered
+        # count is exactly the target. This trades a little diversity for the
+        # business's hard "must be 15/10" requirement, and ONLY kicks in when
+        # genuinely diverse copy was insufficient. Reserve candidates still go
+        # through the full per-candidate pipeline (compliance/keyword/CTA).
+        compliant_count = _count_compliant(all_processed)
+        if (
+            semantic_enabled
+            and compliant_count < target_count
+            and semantic_reserve
+        ):
+            shortfall = target_count - compliant_count
+            backfill = semantic_reserve[:shortfall]
+            log.warning(
+                "orchestrator.quota_backfill",
+                request_id=request_id,
+                compliant_count=compliant_count,
+                target_count=target_count,
+                backfill_count=len(backfill),
+                reserve_size=len(semantic_reserve),
+            )
+            processed_backfill = await asyncio.gather(
+                *[
+                    process_candidate(c, brief, platform_spec, pipeline_deps)
+                    for c in backfill
+                ]
+            )
+            all_processed.extend(processed_backfill)
+            request_warnings.append(
+                f"quota backfill: added {len(backfill)} near-duplicate "
+                f"candidate(s) to reach the {target_count}-candidate "
+                f"{brief.creative_type.value} target (diverse generation "
+                "produced fewer unique candidates)"
+            )
+
+        # ----------------------------------------------------------------------
+        # Stage C: degraded-failure check (Req 7.7 / 5.6) + under-fill warning
         # ----------------------------------------------------------------------
         compliant_count = _count_compliant(all_processed)
         if compliant_count < _MIN_COMPLIANT_CANDIDATES:
@@ -300,6 +516,22 @@ class Orchestrator:
                 request_id=request_id,
             )
 
+        # Between the viability floor and the Target_Count: return what we have
+        # and surface an under-fill warning rather than failing (Requirement 5.5).
+        if compliant_count < target_count:
+            log.warning(
+                "orchestrator.under_filled",
+                request_id=request_id,
+                compliant_count=compliant_count,
+                target_count=target_count,
+                creative_type=brief.creative_type.value,
+            )
+            request_warnings.append(
+                f"under-filled: produced {compliant_count} compliant "
+                f"{brief.creative_type.value} candidate(s), target was "
+                f"{target_count}"
+            )
+
         # ----------------------------------------------------------------------
         # Stage D: rank
         # ----------------------------------------------------------------------
@@ -309,7 +541,8 @@ class Orchestrator:
             request_id=request_id,
             refill_count=refill_count,
             generation_time_ms=generation_time_ms,
-            warnings=warnings or [],
+            warnings=request_warnings,
+            target_count=target_count,
             brief_summary={
                 "topic": brief.campaign_topic,
                 "platform": brief.target_platform.value,
@@ -341,6 +574,119 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _filter_semantic_diversity(
+        self,
+        candidates: list[Creative_Candidate],
+        *,
+        accepted_pool: list[str],
+        rejected_copies: list[str],
+        reserve: list[Creative_Candidate],
+        request_warnings: list[str],
+        fallback_warned: bool,
+        request_id: str,
+    ) -> tuple[list[Creative_Candidate], bool]:
+        """Filter freshly generated candidates for semantic duplicates.
+
+        Implements the semantic-diversity step that runs *after* the
+        generator's text-based dedup and *before* the compliance pipeline
+        (Req 2.7). Each candidate's ``source_copy`` is checked against the
+        ``accepted_pool`` of every source copy accepted so far this request,
+        across all refill rounds (Req 2.9). The method mutates ``accepted_pool``
+        and ``rejected_copies`` in place so subsequent rounds see the
+        accumulated state.
+
+        Behaviour:
+
+        * **Accepted** candidate → its ``source_copy`` is appended to
+          ``accepted_pool`` and the candidate is kept.
+        * **Rejected** (semantic duplicate) → the candidate is dropped and its
+          ``source_copy`` is recorded in ``rejected_copies`` so the
+          orchestrator's ``exclude`` set asks the generator for a replacement
+          (Req 2.5). The checker already logs the rejection pair/score/threshold
+          (Req 2.6).
+        * **Fallback** (embedding model unavailable or timed out) → the checker
+          degrades to text-dedup only: the remaining candidates this round are
+          all kept, a single request-level warning is appended (Req 2.8), and
+          the circuit-breaker counter is left untouched (the checker never
+          raises). Once fallback is observed the checker is skipped for the rest
+          of the request.
+
+        Args:
+            candidates: Freshly generated candidates (already text-deduped).
+            accepted_pool: Source copies accepted so far (mutated in place).
+            rejected_copies: Source copies rejected so far (mutated in place).
+            request_warnings: Request-level warnings list (mutated in place).
+            fallback_warned: Whether the text-dedup-only warning has already
+                been appended this request.
+            request_id: Per-request identifier for logging.
+
+        Returns:
+            ``(kept_candidates, fallback_warned)`` — the candidates that passed
+            the semantic check (or all of them under fallback) and the updated
+            ``fallback_warned`` flag.
+        """
+        checker = self._semantic_diversity_checker
+        assert checker is not None  # guarded by caller (semantic_enabled)
+
+        # Once we have degraded to text-dedup only this request, skip further
+        # embedding work and keep every remaining candidate (Req 2.8).
+        if fallback_warned:
+            return list(candidates), fallback_warned
+
+        kept: list[Creative_Candidate] = []
+        rejected = 0
+        for index, candidate in enumerate(candidates):
+            result = await checker.check_candidate(
+                candidate.source_copy, accepted_pool
+            )
+
+            if result.fallback:
+                # Degrade to text-dedup only: keep this candidate and every
+                # remaining one, append the warning once (Req 2.8).
+                if not fallback_warned:
+                    request_warnings.append(_SEMANTIC_FALLBACK_WARNING)
+                    fallback_warned = True
+                log.warning(
+                    "orchestrator.semantic_diversity_fallback",
+                    request_id=request_id,
+                    reason="embedding_unavailable_or_timeout",
+                )
+                # Keep this candidate and the rest of the batch without
+                # further checks.
+                for remaining in candidates[index:]:
+                    kept.append(remaining)
+                    accepted_pool.append(remaining.source_copy)
+                return kept, fallback_warned
+
+            if result.accepted:
+                kept.append(candidate)
+                accepted_pool.append(candidate.source_copy)
+            else:
+                # Rejected as a semantic duplicate: drop it from the diverse
+                # set, remember its copy so the refill loop excludes it
+                # (Req 2.5), AND keep the candidate object in ``reserve``. The
+                # reserve is a quality-ordered backfill source: if diversified
+                # generation can't reach the ad-group quota, we top up from the
+                # reserve so the delivered count is always exactly the target
+                # (business hard requirement), preferring diverse copies and
+                # only falling back to near-duplicates when unavoidable. The
+                # checker already logged the pair/score/threshold (Req 2.6).
+                rejected += 1
+                rejected_copies.append(candidate.source_copy)
+                reserve.append(candidate)
+
+        if rejected:
+            log.info(
+                "orchestrator.semantic_diversity_filter",
+                request_id=request_id,
+                generated=len(candidates),
+                kept=len(kept),
+                rejected=rejected,
+                accepted_pool_size=len(accepted_pool),
+            )
+
+        return kept, fallback_warned
 
     @staticmethod
     def _check_cascade(failure_count: int, request_id: str) -> None:
@@ -374,3 +720,23 @@ def _has_block(candidate: Creative_Candidate) -> bool:
 def _count_compliant(candidates: list[Creative_Candidate]) -> int:
     """Count candidates whose final compliance report has no BLOCK."""
     return sum(1 for c in candidates if not _has_block(c))
+
+
+def _accepted_angle_counts(
+    candidates: list[Creative_Candidate],
+) -> dict[str, int]:
+    """Tally accepted candidates per angle label across all refill rounds.
+
+    Feeds :meth:`CreativeGenerator.generate_with_angles` so its lowest-count
+    cycling (Req 3.5) keeps balancing angles using the candidates already
+    accepted in earlier rounds, rather than restarting from zero each round.
+    Candidates without an ``angle_label`` (e.g. produced by a single-prompt
+    fallback) are ignored.
+    """
+    counts: dict[str, int] = {}
+    for candidate in candidates:
+        label = candidate.angle_label
+        if label is None:
+            continue
+        counts[label] = counts.get(label, 0) + 1
+    return counts

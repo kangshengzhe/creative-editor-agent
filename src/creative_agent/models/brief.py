@@ -106,6 +106,57 @@ class Creative_Brief(BaseModel):
         default=None,
         description="Optional campaign run window.",
     )
+    target_count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description=(
+            "Optional override for the number of compliant candidates to "
+            "produce (requirement 5.8). When omitted, the Ad_Group_Quota "
+            "default for ``creative_type`` applies (HEADLINE=15, "
+            "DESCRIPTION=10, CTA=5, LONG_COPY=5)."
+        ),
+    )
+
+    # --- Custom generation constraints (operator overrides, requirement 6) -
+    # These let operators steer a single request the way they'd prompt an AI,
+    # which is essential because ad-platform review frequently mis-flags copy
+    # and operators need to regenerate fresh variants that dodge the trigger.
+    must_include: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Phrases every candidate MUST contain (free-text copy constraint, "
+            "distinct from SEO ``keywords``). Used verbatim in the generation "
+            "prompt."
+        ),
+    )
+    must_avoid: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Words/phrases every candidate MUST NOT contain, layered on top of "
+            "the built-in forbidden-term dictionary. Lets operators avoid terms "
+            "an ad platform mis-flagged this time. Enforced both in the prompt "
+            "and as a hard post-generation filter."
+        ),
+    )
+    extra_instructions: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            "Free-form extra instructions appended to the generation prompt, "
+            "exactly like an extra note to an AI (e.g. 'avoid gambling "
+            "connotations', 'use a more playful tone'). Steers tone/wording "
+            "without changing the structured fields."
+        ),
+    )
+    regenerate_avoid: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Previously produced copies to treat as exclusions so a re-run "
+            "yields fresh, different variants ('常换常新'). Fed into the "
+            "generator's dedup exclude set alongside in-request duplicates."
+        ),
+    )
 
 
 __all__ = ["Creative_Brief", "CampaignPeriod"]

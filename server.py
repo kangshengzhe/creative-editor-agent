@@ -28,6 +28,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from creative_agent import configure_logging, get_logger
+from creative_agent.integration.angle_splitter import AngleSplitter
+from creative_agent.integration.keyword_localizer import KeywordLocalizer
+from creative_agent.integration.semantic_diversity import SemanticDiversityChecker
 from creative_agent.llm import RealLLMClient
 from creative_agent.orchestrator import Orchestrator
 from creative_agent.tools.compliance_checker import ComplianceChecker
@@ -52,12 +55,29 @@ except ValueError as exc:
     sys.exit(1)
 
 compliance_checker = ComplianceChecker(llm=None)  # 本地词典模式
+# Semantic_Diversity_Checker (task 10.1 / Req 2.5-2.9). The default embed_fn
+# lazily loads sentence-transformers; if that package/model is unavailable the
+# checker degrades to text-dedup only and surfaces a request-level warning
+# without tripping the circuit breaker (Req 2.8), so wiring it here is safe.
+semantic_diversity_checker = SemanticDiversityChecker()
+# Preload the embedding model now, OUTSIDE the per-request 3s timeout. The
+# first embedding triggers a multi-second model load; if that happened inside
+# check_candidate's timeout the first candidate of the first request would
+# always time out and silently degrade to text-dedup only. Warming up here
+# keeps semantic diversity genuinely live for real requests. A failed warm-up
+# (e.g. offline, package missing) just logs and falls back gracefully.
+if semantic_diversity_checker.warm_up():
+    log.info("server.semantic_diversity_ready")
+else:
+    log.warning("server.semantic_diversity_degraded")
 orchestrator = Orchestrator(
-    creative_generator=CreativeGenerator(llm),
+    creative_generator=CreativeGenerator(llm, angle_splitter=AngleSplitter(llm)),
     compliance_checker=compliance_checker,
     localization_tool=LocalizationTool(llm),
     keyword_embedder=KeywordEmbedder(llm),
     cta_optimizer=CTAOptimizer(llm, compliance_checker=compliance_checker),
+    semantic_diversity_checker=semantic_diversity_checker,
+    keyword_localizer=KeywordLocalizer(llm),
 )
 
 # ---------------------------------------------------------------------------
@@ -113,6 +133,7 @@ async def create_creative_batch(request: Request):
         "errors": {}
     }
     """
+    import asyncio
     import time
     from creative_agent.api import handle_request
 
@@ -120,12 +141,27 @@ async def create_creative_batch(request: Request):
     start = time.perf_counter()
 
     types = ["HEADLINE", "DESCRIPTION", "CTA"]
+
+    # Run the three creative types CONCURRENTLY instead of one-after-another.
+    # Each handle_request is an independent end-to-end pipeline (its own
+    # request_id, stateless orchestrator), so firing them together cuts batch
+    # wall-clock time to roughly the slowest single type instead of their sum.
+    async def _one(creative_type: str):
+        brief = {**body, "creative_type": creative_type}
+        return creative_type, await handle_request(brief, orchestrator)
+
+    settled = await asyncio.gather(
+        *[_one(t) for t in types], return_exceptions=True
+    )
+
     results = {}
     errors = {}
-
-    for creative_type in types:
-        brief = {**body, "creative_type": creative_type}
-        result = await handle_request(brief, orchestrator)
+    for item in settled:
+        if isinstance(item, BaseException):
+            # Defensive: a whole-type crash shouldn't sink the other types.
+            log.error("batch.type_crashed", error=f"{type(item).__name__}: {item}")
+            continue
+        creative_type, result = item
         if result["status_code"] == 200:
             results[creative_type.lower() + "s"] = result["body"]
         else:
@@ -169,15 +205,33 @@ async def health():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
+    import threading
+    import webbrowser
+
     import uvicorn
+
+    # 端口可通过环境变量 PORT 覆盖；默认 8001（8000 通常被 auto_posting 的
+    # Docker 容器占用，见 START.md）。
+    port = int(os.environ.get("PORT", "8001"))
+    url = f"http://localhost:{port}"
+
     print("=" * 60)
     print("Creative Editor Agent — HTTP Server")
     print("=" * 60)
     print()
-    print("  前端界面:  http://localhost:8000")
-    print("  API 文档:  http://localhost:8000/docs")
-    print("  API 端点:  POST http://localhost:8000/api/creative")
+    print(f"  前端界面:  {url}")
+    print(f"  API 文档:  {url}/docs")
+    print(f"  API 端点:  POST {url}/api/creative")
     print()
     print("按 Ctrl+C 停止服务器")
     print()
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # 启动后自动打开浏览器。延迟 1.5 秒，等 uvicorn 完成绑定再打开，
+    # 避免浏览器抢在服务就绪前访问到拒绝连接。
+    def _open_browser() -> None:
+        webbrowser.open(url)
+
+    threading.Timer(1.5, _open_browser).start()
+
+    uvicorn.run(app, host="0.0.0.0", port=port)
