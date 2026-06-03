@@ -162,8 +162,24 @@ textarea{resize:vertical;min-height:60px}
         <label>卖点（逗号分隔）</label>
         <input type="text" id="sellingPoints" placeholder="20% bonus, instant credit" value="20% bonus, instant credit">
       </div>
-      <div style="grid-column:1/-1;display:flex;justify-content:center;margin-top:20px">
-        <button type="submit" class="btn" id="submitBtn" style="width:50%;margin:0">🚀 生成广告创意</button>
+
+      <!-- 高级约束（可选）：像给 AI 加备注一样控制生成 -->
+      <div class="form-group full">
+        <label>必须包含的短语（逗号分隔，可选）</label>
+        <input type="text" id="mustInclude" placeholder="例如：限时, 官方">
+      </div>
+      <div class="form-group full">
+        <label>必须规避的词（逗号分隔，可选）— 被审核误判的词填这里，输出会彻底避开</label>
+        <input type="text" id="mustAvoid" placeholder="例如：guaranteed, jackpot">
+      </div>
+      <div class="form-group full">
+        <label>额外备注 / 创作要求（可选）— 像跟 AI 说话一样</label>
+        <textarea id="extraInstructions" rows="2" placeholder="例如：语气更活泼，规避赌博联想，强调安全合规"></textarea>
+      </div>
+
+      <div style="grid-column:1/-1;display:flex;justify-content:center;gap:12px;margin-top:20px">
+        <button type="submit" class="btn" id="submitBtn" style="width:40%;margin:0">🚀 生成广告创意</button>
+        <button type="button" class="btn" id="regenBtn" style="width:30%;margin:0;background:linear-gradient(135deg,#0ea5e9,#06b6d4)" title="避开上一次的结果，生成全新一批（常换常新，规避审核误判）">🔄 换一批</button>
       </div>
     </form>
     <div class="status" id="status"></div>
@@ -190,7 +206,15 @@ let timerInterval = null;
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  
+
+  // 守卫：如果页面是用 file:// 直接打开的，相对路径请求无后端可连，
+  // 会报 "Failed to fetch"。明确提示用户改用 http://localhost:8001。
+  if (location.protocol === 'file:') {
+    statusEl.textContent = '⚠️ 请不要直接双击打开本文件。先运行 python server.py，再访问 http://localhost:8001';
+    statusEl.className = 'status error';
+    return;
+  }
+
   // 构建 Brief JSON
   const creativeType = document.getElementById('creativeType').value;
   const isBatch = creativeType === 'BATCH';
@@ -207,8 +231,23 @@ form.addEventListener('submit', async (e) => {
     brief.creative_type = creativeType;
   }
 
+  // 高级约束（可选）：像给 AI 加备注一样控制生成
+  const mustInclude = document.getElementById('mustInclude').value.split(',').map(s => s.trim()).filter(Boolean);
+  const mustAvoid = document.getElementById('mustAvoid').value.split(',').map(s => s.trim()).filter(Boolean);
+  const extraInstructions = document.getElementById('extraInstructions').value.trim();
+  if (mustInclude.length) brief.must_include = mustInclude;
+  if (mustAvoid.length) brief.must_avoid = mustAvoid;
+  if (extraInstructions) brief.extra_instructions = extraInstructions;
+
+  // 「换一批」：把上一次产出的文案作为排除项，强制生成全新结果（常换常新）。
+  if (window._regenerate && window._lastCopies && window._lastCopies.length) {
+    brief.regenerate_avoid = window._lastCopies.slice(0, 50);
+  }
+  window._regenerate = false;  // 用完即清，普通生成不带排除
+
   // UI 状态
   submitBtn.disabled = true;
+  document.getElementById('regenBtn').disabled = true;
   submitBtn.textContent = isBatch ? '⏳ 批量生成中（约20-30秒）...' : '⏳ 生成中...';
   statusEl.textContent = isBatch
     ? '正在生成 标题 + 描述 + CTA 三种类型，预计 20-30 秒...'
@@ -282,11 +321,16 @@ form.addEventListener('submit', async (e) => {
         resultsCard.style.display = 'block';
         resultsMeta.innerHTML = `<p style="font-size:13px;color:#64748b">批量模式 | 总用时: ${(data.total_time_ms/1000).toFixed(1)}s${data.errors ? ' | ⚠️ 部分类型失败' : ''}</p>`;
         resultsList.innerHTML = html;
+        // 记住本批所有文案，供「换一批」避开。
+        window._lastCopies = ['headlines','descriptions','ctas']
+          .flatMap(k => (data[k]?.ranked_candidates || []).map(c => c.source_copy));
       } else {
         // 单类型模式
         statusEl.textContent = `✅ 成功！生成了 ${data.ranked_candidates.length} 条候选，用时 ${(data.generation_time_ms/1000).toFixed(1)}s`;
         statusEl.className = 'status';
         renderResults(data);
+        // 记住本次文案，供「换一批」避开。
+        window._lastCopies = (data.ranked_candidates || []).map(c => c.source_copy);
       }
     } else {
       statusEl.textContent = `❌ 错误: ${data.status || resp.status} — ${data.error?.message || '未知错误'}`;
@@ -298,6 +342,7 @@ form.addEventListener('submit', async (e) => {
     statusEl.className = 'status error';
   } finally {
     submitBtn.disabled = false;
+    document.getElementById('regenBtn').disabled = false;
     submitBtn.textContent = '🚀 生成广告创意';
   }
 });
@@ -378,6 +423,17 @@ function toggleDetail(el) {
     detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
   }
 }
+
+// 「换一批」按钮：标记为重新生成（避开上次结果），复用表单提交流程。
+document.getElementById('regenBtn').addEventListener('click', () => {
+  if (!window._lastCopies || !window._lastCopies.length) {
+    statusEl.textContent = '请先生成一次，再点「换一批」';
+    statusEl.className = 'status error';
+    return;
+  }
+  window._regenerate = true;
+  form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', {cancelable: true}));
+});
 
 // Market Picker
 function toggleMarketPicker() {
