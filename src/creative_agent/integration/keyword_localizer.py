@@ -21,6 +21,10 @@ keywords should still be expressed in the local language; only brand/proper
 terms stay fixed. This module asks the shared LLM to make exactly that
 distinction and returns an ``original -> localized`` mapping.
 
+Decision status: CONFIRMED by the business owner (2026-06) — generic keywords
+are localized, brand/product names are kept verbatim (option "A"). Do not
+switch to keep-English-verbatim without a new sign-off.
+
 Behaviour
 ---------
 * English-primary targets (or an empty keyword list) → identity mapping, no

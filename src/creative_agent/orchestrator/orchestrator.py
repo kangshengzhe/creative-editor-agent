@@ -468,6 +468,11 @@ class Orchestrator:
         # business's hard "must be 15/10" requirement, and ONLY kicks in when
         # genuinely diverse copy was insufficient. Reserve candidates still go
         # through the full per-candidate pipeline (compliance/keyword/CTA).
+        #
+        # Decision status: CONFIRMED by the business owner (2026-06) — when a
+        # market can't yield enough fully-distinct copies, prioritise hitting
+        # the exact 15/10 count and backfill with near-duplicates plus a
+        # warning (option "A"), rather than returning fewer fully-diverse ones.
         compliant_count = _count_compliant(all_processed)
         if (
             semantic_enabled
