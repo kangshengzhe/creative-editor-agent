@@ -72,6 +72,7 @@ if TYPE_CHECKING:
         SemanticDiversityChecker,
     )
     from creative_agent.integration.keyword_localizer import KeywordLocalizer
+    from creative_agent.integration.review_translator import ReviewTranslator
     from creative_agent.models.platform_spec import Platform_Spec
     from creative_agent.tools.compliance_checker import ComplianceChecker
     from creative_agent.tools.creative_generator import CreativeGenerator
@@ -148,6 +149,7 @@ class Orchestrator:
         trace_recorder: Optional[TraceRecorder] = None,
         semantic_diversity_checker: Optional["SemanticDiversityChecker"] = None,
         keyword_localizer: Optional["KeywordLocalizer"] = None,
+        review_translator: Optional["ReviewTranslator"] = None,
     ) -> None:
         self._creative_generator = creative_generator
         self._compliance_checker = compliance_checker
@@ -162,6 +164,10 @@ class Orchestrator:
         # non-English copy. When None, keywords are used as-supplied (prior
         # behaviour) and all existing construction sites keep working.
         self._keyword_localizer = keyword_localizer
+        # Optional: translates delivered copies into the HK review team's
+        # languages (Simplified/Traditional Chinese + English) as a review aid,
+        # shown in the UI detail panel. None → skipped (no behavior change).
+        self._review_translator = review_translator
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -556,6 +562,33 @@ class Orchestrator:
             },
             total_generated=total_generated,
         )
+
+        # ----------------------------------------------------------------------
+        # Stage E: operator-review translations (HK team comprehension aid)
+        # ----------------------------------------------------------------------
+        # Translate the *delivered* copies into Simplified/Traditional Chinese
+        # (+ English when the copy isn't already English) so the Hong Kong
+        # reviewers can vet foreign-language ad copy. One batched LLM call for
+        # the whole set; best-effort (failures leave review_translations empty
+        # and never block delivery). Skipped when no translator is wired.
+        if self._review_translator is not None and ranking.ranked_candidates:
+            copies = [c.source_copy for c in ranking.ranked_candidates]
+            copy_is_english = (brief.source_language or "en").strip().lower() == "en"
+            try:
+                review = await self._review_translator.translate(
+                    copies,
+                    copy_is_english=copy_is_english,
+                    request_id=request_id,
+                )
+                for candidate, langs in zip(ranking.ranked_candidates, review):
+                    if langs:
+                        candidate.review_translations = langs
+            except Exception as exc:  # noqa: BLE001 — review aid never blocks
+                log.warning(
+                    "orchestrator.review_translation_failed",
+                    request_id=request_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
 
         log.info(
             "orchestrator.completed",

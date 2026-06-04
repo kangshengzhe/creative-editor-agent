@@ -129,6 +129,18 @@ class Creative_Candidate(BaseModel):
         default_factory=list,
         description="Per-language translation failures (requirement 9.3).",
     )
+    review_translations: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Operator-review translations of ``source_copy`` for the (Hong "
+            "Kong) review team, keyed by free-form language tag — "
+            "``zh-Hans`` (Simplified Chinese), ``zh-Hant`` (Traditional "
+            "Chinese), and ``en`` (English). This is a comprehension aid for "
+            "reviewers and is distinct from ``localized_versions`` (which are "
+            "the actual ad-market translations). ``en`` is omitted when the "
+            "copy is already English."
+        ),
+    )
 
     # --- Scoring ----------------------------------------------------------
     composite_score: float = Field(

@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from creative_agent import configure_logging, get_logger
 from creative_agent.integration.angle_splitter import AngleSplitter
 from creative_agent.integration.keyword_localizer import KeywordLocalizer
+from creative_agent.integration.review_translator import ReviewTranslator
 from creative_agent.integration.semantic_diversity import SemanticDiversityChecker
 from creative_agent.llm import RealLLMClient
 from creative_agent.orchestrator import Orchestrator
@@ -78,6 +79,7 @@ orchestrator = Orchestrator(
     cta_optimizer=CTAOptimizer(llm, compliance_checker=compliance_checker),
     semantic_diversity_checker=semantic_diversity_checker,
     keyword_localizer=KeywordLocalizer(llm),
+    review_translator=ReviewTranslator(llm),
 )
 
 # ---------------------------------------------------------------------------

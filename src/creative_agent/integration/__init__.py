@@ -18,6 +18,7 @@ from creative_agent.integration.angle_splitter import Angle, AngleSplitter
 from creative_agent.integration.display_width import DisplayWidthCalculator
 from creative_agent.integration.keyword_localizer import KeywordLocalizer
 from creative_agent.integration.language_prompts import LanguagePromptSelector
+from creative_agent.integration.review_translator import ReviewTranslator
 from creative_agent.integration.semantic_diversity import (
     DiversityResult,
     EmbeddingUnavailableError,
@@ -30,6 +31,7 @@ __all__ = [
     "DisplayWidthCalculator",
     "KeywordLocalizer",
     "LanguagePromptSelector",
+    "ReviewTranslator",
     "DiversityResult",
     "EmbeddingUnavailableError",
     "SemanticDiversityChecker",
