@@ -98,6 +98,23 @@ class RealLLMClient(LLMClient):
         self._base_url: str = resolved_base.rstrip("/")  # type: ignore[union-attr]
         self._model: str = resolved_model  # type: ignore[assignment]
 
+        # Single pooled async client reused across ALL calls. Previously a new
+        # httpx.AsyncClient was created and torn down per request, forcing a
+        # fresh TCP + TLS handshake every time — with dozens of LLM calls per
+        # generation (angles x candidates x pipeline) that handshake overhead
+        # dominated latency. A shared client keeps connections alive (HTTP
+        # keep-alive) so concurrent calls reuse the pool. Created lazily so the
+        # client is bound to the running event loop.
+        self._client: Optional[httpx.AsyncClient] = None
+        # Generous connection pool so the orchestrator's asyncio.gather fan-out
+        # (parallel angles / candidates / batch types) isn't serialized by a
+        # small default limit.
+        self._limits = httpx.Limits(
+            max_connections=64,
+            max_keepalive_connections=32,
+            keepalive_expiry=30.0,
+        )
+
     # ------------------------------------------------------------------
     # Public API (LLMClient)
     # ------------------------------------------------------------------
@@ -175,6 +192,22 @@ class RealLLMClient(LLMClient):
             "temperature": temperature,
         }
 
+    def _get_client(self) -> httpx.AsyncClient:
+        """Return the shared pooled client, creating it on first use.
+
+        Lazy creation binds the client (and its connection pool) to the active
+        event loop the first time a coroutine actually makes a call.
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(limits=self._limits)
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the pooled client and its connections. Safe to call repeatedly."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
+
     async def _post_with_retry(
         self,
         payload: dict[str, Any],
@@ -189,13 +222,17 @@ class RealLLMClient(LLMClient):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        client = self._get_client()
 
         last_exc: Optional[BaseException] = None
         # Two attempts total: initial + 1 retry on transient errors.
         for attempt in range(2):
             try:
-                async with httpx.AsyncClient(timeout=timeout_s) as client:
-                    response = await client.post(url, headers=headers, json=payload)
+                # Per-request timeout on the shared (pooled) client, so we keep
+                # connection reuse while still honouring each call's budget.
+                response = await client.post(
+                    url, headers=headers, json=payload, timeout=timeout_s
+                )
                 if response.status_code >= 500:
                     last_exc = httpx.HTTPStatusError(
                         f"Upstream returned {response.status_code}",
