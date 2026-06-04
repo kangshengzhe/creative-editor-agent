@@ -178,8 +178,9 @@ textarea{resize:vertical;min-height:60px}
       </div>
 
       <div style="grid-column:1/-1;display:flex;justify-content:center;gap:12px;margin-top:20px">
-        <button type="submit" class="btn" id="submitBtn" style="width:40%;margin:0">🚀 生成广告创意</button>
-        <button type="button" class="btn" id="regenBtn" style="width:30%;margin:0;background:linear-gradient(135deg,#0ea5e9,#06b6d4)" title="避开上一次的结果，生成全新一批（常换常新，规避审核误判）">🔄 换一批</button>
+        <button type="submit" class="btn" id="submitBtn" style="width:36%;margin:0">🚀 生成广告创意</button>
+        <button type="button" class="btn" id="regenBtn" style="width:26%;margin:0;background:linear-gradient(135deg,#0ea5e9,#06b6d4)" title="避开上一次的结果，生成全新一批（常换常新，规避审核误判）">🔄 换一批</button>
+        <button type="button" class="btn" id="abortBtn" style="width:22%;margin:0;display:none;background:linear-gradient(135deg,#ef4444,#f97316)" title="停止本次生成，返回修改 Brief">⏹️ 中断</button>
       </div>
     </form>
     <div class="status" id="status"></div>
@@ -248,6 +249,7 @@ form.addEventListener('submit', async (e) => {
   // UI 状态
   submitBtn.disabled = true;
   document.getElementById('regenBtn').disabled = true;
+  document.getElementById('abortBtn').style.display = 'inline-block';
   submitBtn.textContent = isBatch ? '⏳ 批量生成中（约20-30秒）...' : '⏳ 生成中...';
   statusEl.textContent = isBatch
     ? '正在生成 标题 + 描述 + CTA 三种类型，预计 20-30 秒...'
@@ -266,10 +268,13 @@ form.addEventListener('submit', async (e) => {
 
   try {
     const endpoint = isBatch ? '/api/creative/batch' : '/api/creative';
+    // 可中断：用 AbortController，运营点「中断」时取消这次请求。
+    window._abortController = new AbortController();
     const resp = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(brief),
+      signal: window._abortController.signal,
     });
     const data = await resp.json();
     
@@ -305,7 +310,7 @@ form.addEventListener('submit', async (e) => {
                 </div>
                 <div class="result-detail" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:12px;color:#475569;line-height:1.6">
                   ${c.creative_type !== 'CTA' ? '<div><b>命中:</b> ' + (c.hit_keywords?.length ? c.hit_keywords.join(', ') : '无') + '</div><div><b>跳过:</b> ' + (c.skipped_keywords?.length ? c.skipped_keywords.join(', ') : '无') + '</div>' : ''}
-                  ${Object.keys(c.localized_versions||{}).length ? '<div><b>翻译:</b><br>' + Object.entries(c.localized_versions).filter(([k]) => k !== 'en').map(([k,v]) => '<div style="display:flex;align-items:flex-start;gap:8px;margin:4px 0"><span style="flex:1;word-break:break-word"><b>' + k + ':</b> ' + escapeHtml(v) + '</span><button onclick="event.stopPropagation();copyText(\'' + escapeHtml(v).replace(/'/g, "\\'") + '\')" style="flex-shrink:0;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;color:#6366f1" title="复制翻译">📋</button></div>').join('') + '</div>' : ''}
+                  ${renderReviewTranslations(c, true)}
                   ${c.warnings?.length ? '<div style="color:#d97706"><b>⚠️</b> ' + c.warnings.join('; ') + '</div>' : ''}
                 </div>
               </div>
@@ -338,11 +343,18 @@ form.addEventListener('submit', async (e) => {
     }
   } catch (err) {
     clearInterval(timerInterval);
-    statusEl.textContent = `❌ 网络错误: ${err.message}`;
+    if (err.name === 'AbortError') {
+      statusEl.textContent = '⏹️ 已中断本次生成，请修改 Brief 后重新生成';
+      timerEl.textContent = '';
+    } else {
+      statusEl.textContent = `❌ 网络错误: ${err.message}`;
+    }
     statusEl.className = 'status error';
   } finally {
+    window._abortController = null;
     submitBtn.disabled = false;
     document.getElementById('regenBtn').disabled = false;
+    document.getElementById('abortBtn').style.display = 'none';
     submitBtn.textContent = '🚀 生成广告创意';
   }
 });
@@ -380,7 +392,7 @@ function renderCandidateList(candidates) {
         ${c.hit_keywords?.length ? '✅ 命中: ' + c.hit_keywords.join(', ') : ''}
         ${c.skipped_keywords?.length ? ' | ⚠️ 跳过: ' + c.skipped_keywords.join(', ') : ''}
         ${c.warnings?.length ? ' | 💡 ' + c.warnings.join('; ') : ''}
-        ${Object.keys(c.localized_versions || {}).length ? ' | 🌐 ' + Object.keys(c.localized_versions).join(', ') : ''}
+        ${Object.keys(c.review_translations || {}).length ? ' | 🌐 审核翻译可看' : ''}
       </div>
       <div class="result-detail" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:13px;color:#475569">
         <p style="margin-bottom:4px;color:#94a3b8;font-size:11px">👆 点击展开/收起详情</p>
@@ -393,7 +405,7 @@ function renderCandidateList(candidates) {
           <tr><td style="padding:4px 8px;font-weight:600">hit_keywords</td><td>${JSON.stringify(c.hit_keywords)}</td></tr>
           <tr><td style="padding:4px 8px;font-weight:600">skipped_keywords</td><td>${JSON.stringify(c.skipped_keywords)}</td></tr>
           <tr><td style="padding:4px 8px;font-weight:600">violations</td><td>${c.compliance_report.violations.length === 0 ? '无违规 ✅' : c.compliance_report.violations.map(v => v.category + '(' + v.severity + '): ' + (v.matched_term||'') + ' → ' + v.suggestion).join('<br>')}</td></tr>
-          <tr><td style="padding:4px 8px;font-weight:600">localized_versions</td><td>${Object.keys(c.localized_versions||{}).length === 0 ? '无翻译' : Object.entries(c.localized_versions).map(([k,v]) => '<b>' + k + '</b>: ' + escapeHtml(v)).join('<br>')}</td></tr>
+          <tr><td style="padding:4px 8px;font-weight:600">审核翻译</td><td>${(() => { const rt = c.review_translations || {}; const ks = ['zh-Hans','zh-Hant','en'].filter(k => rt[k]); return ks.length === 0 ? '无' : ks.map(k => '<b>' + (REVIEW_LANG_LABELS[k]||k) + '</b>: ' + escapeHtml(rt[k])).join('<br>'); })()}</td></tr>
           <tr><td style="padding:4px 8px;font-weight:600">warnings</td><td>${c.warnings?.length ? c.warnings.join('<br>') : '无'}</td></tr>
         </table>
       </div>
@@ -405,6 +417,26 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// 渲染「审核翻译」（给香港运营看的：简体中文/繁体中文/英语），
+// 取代之前重复显示目标市场语言的 localized_versions。
+const REVIEW_LANG_LABELS = { 'zh-Hans': '简体中文', 'zh-Hant': '繁体中文', 'en': 'English' };
+function renderReviewTranslations(c, compact) {
+  const rt = c.review_translations || {};
+  const keys = ['zh-Hans', 'zh-Hant', 'en'].filter(k => rt[k]);
+  if (!keys.length) return '';
+  const rows = keys.map(k => {
+    const label = REVIEW_LANG_LABELS[k] || k;
+    const val = escapeHtml(rt[k]);
+    const safe = val.replace(/'/g, "\\'");
+    return '<div style="display:flex;align-items:flex-start;gap:8px;margin:4px 0">'
+      + '<span style="flex:1;word-break:break-word"><b>' + label + '：</b>' + val + '</span>'
+      + '<button onclick="event.stopPropagation();copyText(\'' + safe + '\')" '
+      + 'style="flex-shrink:0;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;color:#6366f1" title="复制">📋</button>'
+      + '</div>';
+  }).join('');
+  return '<div style="margin-top:6px"><b>审核翻译（供参考）：</b>' + rows + '</div>';
 }
 
 function copyText(text) {
@@ -433,6 +465,13 @@ document.getElementById('regenBtn').addEventListener('click', () => {
   }
   window._regenerate = true;
   form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', {cancelable: true}));
+});
+
+// 「中断」按钮：取消正在进行的生成请求，运营可返回修改 Brief。
+document.getElementById('abortBtn').addEventListener('click', () => {
+  if (window._abortController) {
+    window._abortController.abort();
+  }
 });
 
 // Market Picker
