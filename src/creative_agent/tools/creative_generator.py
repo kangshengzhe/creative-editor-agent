@@ -30,6 +30,7 @@ Behaviour summary
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -94,9 +95,35 @@ _MAX_ANGLE_CALLS: int = 64
 #: Tokens budget for the JSON candidate response.
 _LLM_MAX_TOKENS: int = 4096
 
-#: Sampling temperature — high enough to encourage candidate diversity
-#: (Requirement 2.5) without going off-prompt.
-_LLM_TEMPERATURE: float = 0.8
+#: Sampling temperature for creative generation — high enough to encourage
+#: candidate diversity (Requirement 2.5) without going off-prompt. Configurable
+#: via the ``GENERATION_TEMPERATURE`` environment variable (.env) so operators
+#: can tune creativity without code changes; defaults to 0.8 and falls back to
+#: 0.8 if the value is missing or unparseable. Only the *creative generation*
+#: call uses this — precise tasks (translation, scoring, keyword matching) keep
+#: their own low temperatures so raising this never destabilises them.
+def _load_generation_temperature(default: float = 0.8) -> float:
+    # Ensure .env is loaded even if this module is imported before the LLM
+    # client (which also calls load_dotenv). load_dotenv is idempotent and does
+    # not override variables already set in the real environment.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:  # noqa: BLE001 — dotenv is optional; env may be preset
+        pass
+    raw = os.getenv("GENERATION_TEMPERATURE")
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    # Clamp to the valid sampling range so a typo can't break API calls.
+    return max(0.0, min(2.0, value))
+
+
+_LLM_TEMPERATURE: float = _load_generation_temperature()
 
 #: Language code for English (Req 1.7). English-primary markets keep the
 #: standard English generation flow; the native-generation fallback also
