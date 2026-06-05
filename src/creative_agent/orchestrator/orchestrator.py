@@ -510,6 +510,29 @@ class Orchestrator:
             )
 
         # ----------------------------------------------------------------------
+        # Stage B.6: keyword-coverage priority swap (business decision 2026-06)
+        # ----------------------------------------------------------------------
+        # Semantic diversity runs BEFORE the keyword check, so a delivered copy
+        # can be diverse yet still miss an SEO keyword (the model occasionally
+        # drops one despite the mandatory-keyword instruction). The business
+        # rule is: keyword coverage OUTRANKS diversity. So if any delivered
+        # candidate is missing a keyword, try to swap it for a reserve candidate
+        # (a near-duplicate set aside by the semantic filter) that DOES cover
+        # every keyword — accepting that the replacement may be semantically
+        # close to an existing copy. Only swaps when such a reserve candidate
+        # exists; otherwise the original is kept (best effort, never worse).
+        if semantic_enabled and semantic_reserve and brief.keywords:
+            await self._swap_in_keyword_covering_reserve(
+                delivered=all_processed,
+                reserve=semantic_reserve,
+                brief=brief,
+                platform_spec=platform_spec,
+                deps=pipeline_deps,
+                request_warnings=request_warnings,
+                request_id=request_id,
+            )
+
+        # ----------------------------------------------------------------------
         # Stage C: degraded-failure check (Req 7.7 / 5.6) + under-fill warning
         # ----------------------------------------------------------------------
         compliant_count = _count_compliant(all_processed)
@@ -744,6 +767,106 @@ class Orchestrator:
 
         return kept, fallback_warned
 
+    async def _swap_in_keyword_covering_reserve(
+        self,
+        *,
+        delivered: list[Creative_Candidate],
+        reserve: list[Creative_Candidate],
+        brief: Creative_Brief,
+        platform_spec: "Platform_Spec",
+        deps: PipelineDeps,
+        request_warnings: list[str],
+        request_id: str,
+    ) -> None:
+        """Replace delivered candidates that miss a keyword with reserve ones
+        that cover every keyword (business rule: coverage > diversity).
+
+        Mutates ``delivered`` in place. Only swaps when a keyword-covering
+        replacement is actually found, so the result is never worse than the
+        input. Reserve candidates are raw (pre-pipeline), so we pre-filter them
+        cheaply by a language-aware keyword check on the raw copy, then run the
+        full pipeline on the shortlist and keep only those that come out
+        compliant AND keyword-complete.
+        """
+        from creative_agent.tools.keyword_embedder import word_boundary_match
+
+        keywords = [k for k in (brief.keywords or []) if k and k.strip()]
+        if not keywords:
+            return
+
+        # Delivered candidates that are compliant but missing >=1 keyword.
+        gaps = [
+            c for c in delivered
+            if not _has_block(c) and not _covers_all_keywords(c)
+        ]
+        if not gaps:
+            return  # every delivered copy already covers its keywords
+
+        # Reserve copies already delivered must not be re-used.
+        delivered_copies = {c.source_copy for c in delivered}
+
+        # Pre-filter the reserve to copies that plausibly contain all keywords
+        # (cheap, no LLM). Use each reserve candidate's own generation language.
+        # Cap the shortlist at exactly the number of gaps: each extra shortlist
+        # entry costs a full pipeline run (compliance + localization + CTA, with
+        # LLM calls), so we take only as many as we could actually use rather
+        # than an oversized margin.
+        shortlist: list[Creative_Candidate] = []
+        for r in reserve:
+            if r.source_copy in delivered_copies:
+                continue
+            lang = r.generation_language
+            if all(word_boundary_match(r.source_copy, k, lang) for k in keywords):
+                shortlist.append(r)
+            if len(shortlist) >= len(gaps):
+                break
+        if not shortlist:
+            return
+
+        # Run the pipeline on the shortlist so replacements get real
+        # compliance/keyword/CTA fields, then keep only the ones that end up
+        # compliant AND keyword-complete.
+        processed = await asyncio.gather(
+            *[
+                process_candidate(r, brief, platform_spec, deps)
+                for r in shortlist
+            ]
+        )
+        replacements = [
+            p for p in processed
+            if not _has_block(p) and _covers_all_keywords(p)
+            and p.source_copy not in delivered_copies
+        ]
+        if not replacements:
+            return
+
+        # Swap: replace as many keyword-gap candidates as we have replacements.
+        swapped = 0
+        for gap in gaps:
+            if not replacements:
+                break
+            replacement = replacements.pop(0)
+            idx = delivered.index(gap)
+            delivered[idx] = replacement
+            delivered_copies.discard(gap.source_copy)
+            delivered_copies.add(replacement.source_copy)
+            swapped += 1
+
+        if swapped:
+            log.info(
+                "orchestrator.keyword_priority_swap",
+                request_id=request_id,
+                swapped=swapped,
+                keyword_gaps=len(gaps),
+                creative_type=brief.creative_type.value,
+            )
+            request_warnings.append(
+                f"keyword-priority swap: replaced {swapped} candidate(s) "
+                "missing a keyword with keyword-covering alternatives that may "
+                "be semantically close to existing copy (coverage prioritised "
+                "over diversity)"
+            )
+
     @staticmethod
     def _check_cascade(failure_count: int, request_id: str) -> None:
         """Trip the global circuit breaker when failures exceed the threshold."""
@@ -776,6 +899,16 @@ def _has_block(candidate: Creative_Candidate) -> bool:
 def _count_compliant(candidates: list[Creative_Candidate]) -> int:
     """Count candidates whose final compliance report has no BLOCK."""
     return sum(1 for c in candidates if not _has_block(c))
+
+
+def _covers_all_keywords(candidate: Creative_Candidate) -> bool:
+    """True iff the (pipeline-processed) candidate is missing no keyword.
+
+    The keyword pipeline step populates ``skipped_keywords`` with any SEO
+    keyword it could not find in the final copy (using language-aware
+    matching). An empty list therefore means full keyword coverage.
+    """
+    return not candidate.skipped_keywords
 
 
 def _accepted_angle_counts(
