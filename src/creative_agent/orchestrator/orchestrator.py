@@ -567,13 +567,31 @@ class Orchestrator:
         # Stage E: operator-review translations (HK team comprehension aid)
         # ----------------------------------------------------------------------
         # Translate the *delivered* copies into Simplified/Traditional Chinese
-        # (+ English when the copy isn't already English) so the Hong Kong
-        # reviewers can vet foreign-language ad copy. One batched LLM call for
-        # the whole set; best-effort (failures leave review_translations empty
-        # and never block delivery). Skipped when no translator is wired.
+        # (+ English) so the Hong Kong reviewers can vet foreign-language ad
+        # copy. One batched LLM call for the whole set; best-effort (failures
+        # leave review_translations empty and never block delivery). Skipped
+        # when no translator is wired.
+        #
+        # English is included for EVERY non-English market (operators asked for
+        # zh-Hans + zh-Hant + en on e.g. Hindi/Vietnamese copy). We only drop
+        # the redundant English pass when the DELIVERED copy is itself English —
+        # which is decided by the target market's primary language, NOT
+        # ``brief.source_language`` (the input language). Using source_language
+        # was the bug: a Hindi-market run with an English brief was wrongly
+        # flagged "already English", so English review translation was skipped.
         if self._review_translator is not None and ranking.ranked_candidates:
             copies = [c.source_copy for c in ranking.ranked_candidates]
-            copy_is_english = (brief.source_language or "en").strip().lower() == "en"
+            try:
+                from creative_agent.integration.language_prompts import (
+                    LanguagePromptSelector,
+                )
+
+                delivered_language = LanguagePromptSelector().get_primary_language(
+                    brief.target_market
+                )
+            except KeyError:
+                delivered_language = "en"
+            copy_is_english = delivered_language.strip().lower() == "en"
             try:
                 review = await self._review_translator.translate(
                     copies,
