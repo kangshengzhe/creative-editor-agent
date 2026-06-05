@@ -10,18 +10,22 @@ This is deliberately separate from ``localized_versions`` (the actual
 ad-market translations). The review languages are fixed (operator-facing), not
 market-driven, and English is skipped when the copy is already English.
 
-Performance
------------
-All copies of a request are translated in ONE batched ``complete_json`` call
-(not per-candidate), so the cost is a single extra LLM round-trip per creative
-type rather than dozens. If the model omits some items (LLMs reliably drop the
-trailing entry of a long numbered list), a single follow-up call re-requests
-only the missing indices. Failures degrade gracefully to an empty map — the
-review aid is best-effort and never blocks delivery.
+Performance & correctness
+-------------------------
+Each delivered copy is translated by its OWN LLM call, all fired concurrently
+via ``asyncio.gather``. We deliberately do NOT batch many copies into one
+numbered-list call: with a batched list the model occasionally mislabels or
+shifts the per-item ``index`` (and reliably drops the trailing item), which
+caused a translation to be attached to the WRONG candidate (or the last item to
+be left blank). One copy per call makes misalignment impossible — the result
+for copy ``i`` can only come from copy ``i``'s own call. Concurrency keeps the
+wall-clock cost close to a single round-trip. Each call is best-effort: a
+failure leaves that copy's map empty and never blocks delivery.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from creative_agent.errors.codes import ToolFailureError
@@ -34,29 +38,29 @@ __all__ = ["ReviewTranslator", "REVIEW_LANGUAGES"]
 #: is already English (see :meth:`ReviewTranslator.translate`).
 REVIEW_LANGUAGES: tuple[str, ...] = ("zh-Hans", "zh-Hant", "en")
 
-_LLM_MAX_TOKENS: int = 4096
+_LLM_MAX_TOKENS: int = 1024
 _LLM_TEMPERATURE: float = 0.2
 _LLM_TIMEOUT_MS: int = 30000
 
 _SYSTEM_PROMPT: str = (
     "You are a precise translator helping a Hong Kong ad-ops team review "
-    "foreign-language ad copy. Translate each provided ad copy into the "
-    "requested review languages, preserving meaning and tone. Keep brand / "
-    "product names unchanged.\n\n"
+    "foreign-language ad copy. Translate the ONE ad copy the user gives you "
+    "into the requested review languages, preserving meaning and tone. Keep "
+    "brand / product names unchanged. Translate EXACTLY the text given, even "
+    "if it looks truncated or incomplete — do not complete, expand, or guess "
+    "missing words.\n\n"
     "Review language tags:\n"
     "- zh-Hans = Simplified Chinese\n"
     "- zh-Hant = Traditional Chinese\n"
     "- en = English\n\n"
-    "Respond with STRICT JSON only (no markdown, no commentary):\n"
-    '{"items": [{"index": <int>, "zh-Hans": "...", "zh-Hant": "...", '
-    '"en": "..."}, ...]}\n'
-    "Include exactly the requested language keys for every item, in input "
-    "order, one entry per input copy."
+    "Respond with STRICT JSON only (no markdown, no commentary), containing "
+    "exactly the requested language keys:\n"
+    '{"zh-Hans": "...", "zh-Hant": "...", "en": "..."}'
 )
 
 
 class ReviewTranslator:
-    """Batch-translates delivered copies into the HK review languages."""
+    """Translates delivered copies into the HK review languages (per-copy)."""
 
     def __init__(self, llm_client: LLMClient, *, timeout_ms: int = _LLM_TIMEOUT_MS) -> None:
         self._llm = llm_client
@@ -70,14 +74,12 @@ class ReviewTranslator:
         copy_is_english: bool,
         request_id: Optional[str] = None,
     ) -> list[dict[str, str]]:
-        """Translate ``copies`` into the review languages.
+        """Translate ``copies`` into the review languages, one call per copy.
 
-        Issues one batched LLM call for the whole set, then makes a single
-        follow-up call to fill in any items the model omitted. LLMs reliably
-        drop the *last* numbered entry (and occasionally others) from long
-        batch lists, which previously left the final headline / description
-        without a review translation. The patch-up pass re-requests only the
-        missing indices so the returned list is complete.
+        Every copy is translated by its own concurrent LLM call, so the result
+        for copy ``i`` is guaranteed to be the translation of ``copies[i]`` (no
+        batch index to mislabel) and reflects EXACTLY the delivered — i.e.
+        possibly truncated — text the frontend shows.
 
         Args:
             copies: The delivered candidate source copies, in order.
@@ -87,65 +89,40 @@ class ReviewTranslator:
 
         Returns:
             A list parallel to ``copies``; element ``i`` is a
-            ``{lang_tag: translation}`` map for ``copies[i]``. On any failure
-            returns a list of empty dicts (best-effort; never raises).
+            ``{lang_tag: translation}`` map for ``copies[i]``. A per-copy
+            failure yields an empty dict for that copy (best-effort; never
+            raises).
         """
         if not copies:
             return []
 
-        languages = [lang for lang in REVIEW_LANGUAGES if not (lang == "en" and copy_is_english)]
+        languages = [
+            lang for lang in REVIEW_LANGUAGES if not (lang == "en" and copy_is_english)
+        ]
 
-        result = await self._translate_batch(
-            copies, languages, request_id=request_id
+        results = await asyncio.gather(
+            *[
+                self._translate_one(copy, languages, request_id=request_id)
+                for copy in copies
+            ]
         )
+        return list(results)
 
-        # Patch-up pass: LLMs routinely omit the trailing entry of a long
-        # numbered list, so re-request only the indices that came back empty.
-        missing = [i for i, langs in enumerate(result) if not langs]
-        if missing:
-            self._log.warning(
-                "review_translator.missing_items",
-                request_id=request_id,
-                missing_count=len(missing),
-                total=len(copies),
-                indices=missing,
-            )
-            retry_copies = [copies[i] for i in missing]
-            retry = await self._translate_batch(
-                retry_copies, languages, request_id=request_id
-            )
-            for missing_idx, langs in zip(missing, retry):
-                if langs:
-                    result[missing_idx] = langs
-
-        return result
-
-    async def _translate_batch(
+    async def _translate_one(
         self,
-        copies: list[str],
+        copy: str,
         languages: list[str],
         *,
         request_id: Optional[str] = None,
-    ) -> list[dict[str, str]]:
-        """One batched ``complete_json`` call for ``copies`` → per-copy maps.
+    ) -> dict[str, str]:
+        """Translate a single copy into ``languages``; empty dict on failure."""
+        if not copy or not copy.strip():
+            return {}
 
-        Returns a list parallel to ``copies`` (empty dict where the model
-        omitted an item). Never raises — failures degrade to all-empty.
-        """
-        empty: list[dict[str, str]] = [{} for _ in copies]
-        if not copies:
-            return empty
-
-        numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(copies))
         prompt = (
             f"Review languages requested: {', '.join(languages)}\n\n"
-            f"There are EXACTLY {len(copies)} ad copies below, indexed 0 to "
-            f"{len(copies) - 1}. You MUST return one entry for EVERY index, "
-            f"including the last one (index {len(copies) - 1}). Do not stop "
-            "early.\n\n"
-            "Translate each of these ad copies into the requested review "
-            "languages:\n"
-            f"{numbered}"
+            "Translate this exact ad copy (do not complete or expand it):\n"
+            f"{copy}"
         )
 
         try:
@@ -162,39 +139,25 @@ class ReviewTranslator:
                 request_id=request_id,
                 reason=exc.message,
             )
-            return empty
+            return {}
         except Exception as exc:  # noqa: BLE001 — best-effort aid, never block
             self._log.warning(
                 "review_translator.failed",
                 request_id=request_id,
                 reason=f"{type(exc).__name__}: {exc}",
             )
-            return empty
+            return {}
 
-        return self._parse(payload, len(copies), languages)
+        return self._parse_one(payload, languages)
 
     @staticmethod
-    def _parse(
-        payload: object, count: int, languages: list[str]
-    ) -> list[dict[str, str]]:
-        """Map the LLM JSON back to a per-copy list, tolerant of omissions."""
-        result: list[dict[str, str]] = [{} for _ in range(count)]
+    def _parse_one(payload: object, languages: list[str]) -> dict[str, str]:
+        """Extract the requested language keys from a single-copy JSON object."""
         if not isinstance(payload, dict):
-            return result
-        items = payload.get("items")
-        if not isinstance(items, list):
-            return result
-        for entry in items:
-            if not isinstance(entry, dict):
-                continue
-            idx = entry.get("index")
-            if not isinstance(idx, int) or not (0 <= idx < count):
-                continue
-            langs: dict[str, str] = {}
-            for lang in languages:
-                val = entry.get(lang)
-                if isinstance(val, str) and val.strip():
-                    langs[lang] = val.strip()
-            if langs:
-                result[idx] = langs
-        return result
+            return {}
+        langs: dict[str, str] = {}
+        for lang in languages:
+            val = payload.get(lang)
+            if isinstance(val, str) and val.strip():
+                langs[lang] = val.strip()
+        return langs
