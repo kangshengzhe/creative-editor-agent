@@ -73,6 +73,18 @@ _OVER_REQUEST: int = 2
 #: (Requirement 3.4). One call per angle, 3 candidates per call.
 _CANDIDATES_PER_ANGLE_CALL: int = 3
 
+#: Phase-2 wave overshoot. Each refill wave fires roughly this multiple of the
+#: remaining gap (in calls) concurrently. Kept at 1.0 (cover the gap, no extra)
+#: because overshooting generates surplus candidates that still cost full
+#: downstream pipeline work (compliance/keyword/CTA) and inflate the reserve
+#: pool, which measured *slower* overall, not faster. The win comes purely from
+#: running the gap-covering calls of each wave in parallel rather than serially.
+_WAVE_OVERSHOOT: float = 1.0
+
+#: Hard cap on how many angle calls a single Phase-2 wave fires concurrently,
+#: so a large ``min_count`` can't open an unbounded number of sockets at once.
+_MAX_WAVE_CALLS: int = 12
+
 #: Hard cap on the number of angle generation calls a single
 #: ``generate_with_angles`` invocation will issue, so a pathological
 #: ``min_count`` cannot spin the round-robin loop unbounded. Sized generously:
@@ -586,8 +598,11 @@ class CreativeGenerator:
         angle gets its first call before any angle gets a second.
 
         Phase 2 (cycling, Req 3.5): while more unique candidates are needed,
-        pick the angle with the fewest *accepted* candidates (ties broken by the
-        angle's original order) and issue another 3-candidate call.
+        issue a *wave* of lowest-count angle calls concurrently (each angle
+        picked by fewest accepted candidates, ties broken by original order),
+        then merge + dedup and repeat only if still short. This keeps the
+        lowest-count balancing while collapsing the previously-serial refill
+        round-trips into a few parallel waves.
 
         ``accepted_angle_counts`` seeds the per-angle accepted tally so cycling
         stays balanced across the orchestrator's refill rounds.
@@ -651,38 +666,85 @@ class CreativeGenerator:
                 accepted_counts[angle.label] += 1
 
         # Phase 2 — cycle from the lowest-count angle until we hit min_count
-        # (Req 3.5). Bounded by the shared call budget so a chronically
+        # (Req 3.5). Instead of one sequential call at a time (which serialised
+        # 5–10 LLM round-trips for a 15-headline target), we issue a *wave* of
+        # lowest-count angle calls CONCURRENTLY, then merge + dedup, and repeat
+        # only if still short. This preserves the lowest-count balancing (each
+        # wave picks the currently-neediest angles, breaking ties by angle
+        # order) while collapsing the serial round-trips into a few parallel
+        # waves. Bounded by the shared call budget so a chronically
         # under-producing LLM cannot loop forever.
         while len(accepted) < min_count and call_budget > 0:
-            label = self._select_lowest_count_angle(accepted_counts, order_index)
-            angle = angle_by_label[label]
-            call_budget -= 1
-            produced = await self._generate_one_angle_call(
-                brief=brief,
-                platform_spec=platform_spec,
-                char_limit=char_limit,
-                angle=angle,
-                excludes=seen_copies,
-                request_id=request_id,
-                tool_failure_counter=tool_failure_counter,
-                plan=plan,
-                start_index=len(accepted),
+            # How many more candidates do we need, and therefore how many
+            # 3-candidate calls to fire this wave. We overshoot by _WAVE_OVERSHOOT
+            # because the Orchestrator's semantic dedup discards much of each
+            # batch downstream — sizing to the bare gap would mean many tiny
+            # serial waves. Capped by _MAX_WAVE_CALLS and the remaining budget.
+            needed = min_count - len(accepted)
+            wave_calls = int(
+                needed * _WAVE_OVERSHOOT // _CANDIDATES_PER_ANGLE_CALL
+            ) + 1
+            wave_calls = min(wave_calls, _MAX_WAVE_CALLS, call_budget)
+
+            # Pick this wave's angles by repeatedly choosing the lowest-count
+            # angle, charging a *provisional* count of one call's worth of
+            # candidates per pick. Charging _CANDIDATES_PER_ANGLE_CALL (not 1)
+            # makes a concurrent wave select the SAME angle sequence the old
+            # serial loop would have, since each serial call added its ~3
+            # produced candidates to the tally before the next pick. Provisional
+            # counts are discarded after selection; real counts are updated from
+            # actual accepted candidates below.
+            provisional = dict(accepted_counts)
+            wave_labels: list[str] = []
+            for _ in range(wave_calls):
+                label = self._select_lowest_count_angle(provisional, order_index)
+                wave_labels.append(label)
+                provisional[label] += _CANDIDATES_PER_ANGLE_CALL
+
+            call_budget -= len(wave_labels)
+
+            wave_results = await asyncio.gather(
+                *[
+                    self._generate_one_angle_call(
+                        brief=brief,
+                        platform_spec=platform_spec,
+                        char_limit=char_limit,
+                        angle=angle_by_label[label],
+                        excludes=seen_copies,
+                        request_id=request_id,
+                        tool_failure_counter=tool_failure_counter,
+                        plan=plan,
+                        start_index=len(accepted),  # reindexed on merge
+                    )
+                    for label in wave_labels
+                ]
             )
-            if not produced:
-                # This angle yielded nothing new this round. Bump its tally so
-                # the selector moves on to a different angle and we make
-                # progress rather than retrying the same barren angle forever.
-                accepted_counts[label] += 1
-                continue
-            for cand in produced:
-                norm = self._normalise(cand.source_copy)
-                if not norm or norm in seen_norm:
+
+            progressed = False
+            for label, produced in zip(wave_labels, wave_results):
+                if not produced:
+                    # This angle yielded nothing new. Bump its real tally so the
+                    # next wave's selector moves on rather than re-picking a
+                    # barren angle forever.
+                    accepted_counts[label] += 1
                     continue
-                seen_norm.add(norm)
-                cand.generation_index = len(accepted)
-                accepted.append(cand)
-                seen_copies.append(cand.source_copy)
-                accepted_counts[angle.label] += 1
+                for cand in produced:
+                    norm = self._normalise(cand.source_copy)
+                    if not norm or norm in seen_norm:
+                        continue
+                    seen_norm.add(norm)
+                    cand.generation_index = len(accepted)
+                    accepted.append(cand)
+                    seen_copies.append(cand.source_copy)
+                    accepted_counts[label] += 1
+                    progressed = True
+
+            if not progressed:
+                # An entire wave produced nothing usable (all empty or all
+                # duplicates). The angle tallies were bumped above so selection
+                # advances; if the budget is exhausted the loop exits and the
+                # insufficiency check below handles it.
+                continue
 
         if len(accepted) < min_count:
             self._log.error(
