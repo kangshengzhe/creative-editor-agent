@@ -90,9 +90,12 @@ class TestSpaceSeparatedStaysStrict:
     def test_russian_matches(self) -> None:
         assert word_boundary_match("пополни счёт сейчас", "пополни") is True
 
-    def test_russian_substring_guard(self) -> None:
-        # "счёт" must not match inside the longer "счётчик".
-        assert word_boundary_match("открой счётчик сегодня", "счёт") is False
+    def test_russian_stem_prefix_is_intentionally_broad(self) -> None:
+        # Cyrillic uses stem-prefix matching (see TestCyrillicStemMatching):
+        # a 4-char stem like "счёт" therefore also matches the longer
+        # "счётчик". This is a deliberate tradeoff — broad matching beats the
+        # alternative of missing every declined form (бонус→бонусом etc.).
+        assert word_boundary_match("открой счётчик сегодня", "счёт") is True
 
     def test_empty_keyword_is_false(self) -> None:
         assert word_boundary_match("anything", "") is False
@@ -118,3 +121,82 @@ class TestStrategySelection:
     def test_mixed_script_keyword_with_cjk_uses_substring(self) -> None:
         # A CJK keyword carrying a Latin brand token still needs substring mode.
         assert _uses_substring_matching("充值Coco") is True
+
+
+class TestCyrillicStemMatching:
+    """Russian/Kazakh decline nouns through cases — match the stem, not the
+    exact citation form, without over-matching unrelated roots."""
+
+    def test_locative_declension_matches(self) -> None:
+        # пополнении (locative) of пополнение ("top-up").
+        assert word_boundary_match("Бонус при пополнении — без задержек", "пополнение") is True
+
+    def test_instrumental_declension_matches(self) -> None:
+        # бонусом (instrumental) of бонус.
+        assert word_boundary_match("Пополнение с бонусом — мгновенно", "бонус") is True
+
+    def test_genitive_declension_matches(self) -> None:
+        assert word_boundary_match("Получи бонуса сегодня", "бонус") is True
+
+    def test_nominative_exact_matches(self) -> None:
+        assert word_boundary_match("Большой бонус ждёт тебя", "бонус") is True
+
+    def test_genuinely_absent_does_not_match(self) -> None:
+        assert word_boundary_match("Все больше выбирают пополнение", "бонус") is False
+
+    def test_unrelated_word_does_not_over_match(self) -> None:
+        # бонжур ("bonjour") shares leading letters but a different stem.
+        assert word_boundary_match("Бонжур, друзья!", "бонус") is False
+
+    def test_stem_counts_multiple_declensions(self) -> None:
+        assert _count_keyword_hits("бонус и бонуса и бонусом", "бонус") == 3
+
+
+class TestLatinLanguageAwareMatching:
+    """Latin script alone can't distinguish English (strict) from inflected /
+    agglutinative languages; matching is routed by the target ``language``."""
+
+    # --- English / Vietnamese stay strict (no language or en/vi) ----------
+    def test_english_strict_without_language(self) -> None:
+        assert word_boundary_match("the player scored", "play") is False
+
+    def test_english_strict_with_en(self) -> None:
+        assert word_boundary_match("the player scored", "play", "en") is False
+        assert word_boundary_match("press play now", "play", "en") is True
+
+    def test_vietnamese_stays_strict(self) -> None:
+        assert word_boundary_match("nap tien ngay", "nap", "vi") is True
+        assert word_boundary_match("napkin holder", "nap", "vi") is False
+
+    # --- Spanish / Portuguese / Turkish: suffix stem-prefix ---------------
+    def test_spanish_plural_matches(self) -> None:
+        assert word_boundary_match("recargas instantaneas", "recarga", "es") is True
+
+    def test_spanish_short_plural_matches(self) -> None:
+        assert word_boundary_match("bonos exclusivos", "bono", "es") is True
+
+    def test_spanish_genuine_miss(self) -> None:
+        assert word_boundary_match("compra ahora", "recarga", "es") is False
+
+    def test_turkish_agglutinated_suffix_matches(self) -> None:
+        assert word_boundary_match("yuklemenizi tamamlayin", "yukleme", "tr") is True
+
+    # --- Indonesian / Filipino: affix substring-in-word -------------------
+    def test_indonesian_circumfix_matches(self) -> None:
+        assert word_boundary_match("pengisian ulang cepat", "isi", "id") is True
+
+    def test_filipino_prefix_matches(self) -> None:
+        assert word_boundary_match("magkarga ka ngayon", "karga", "fil") is True
+
+    # --- A Latin keyword without language defaults to strict --------------
+    def test_latin_without_language_is_strict(self) -> None:
+        # Same Spanish text but no language -> strict, plural NOT matched.
+        assert word_boundary_match("recargas instantaneas", "recarga") is False
+
+
+class TestDevanagariSubstring:
+    def test_hindi_keyword_matches_as_substring(self) -> None:
+        assert word_boundary_match("अभी रिचार्ज करें और बोनस पाएं", "रिचार्ज") is True
+
+    def test_hindi_absent_keyword_does_not_match(self) -> None:
+        assert word_boundary_match("अभी बोनस पाएं", "रिचार्ज") is False

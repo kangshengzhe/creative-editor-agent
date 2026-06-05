@@ -414,6 +414,7 @@ async def _run_keyword_embed(
             keywords,
             platform_spec,
             brief.creative_type,
+            language=candidate.generation_language,
         )
     except ToolFailureError as exc:
         duration_ms = _elapsed_ms(start)

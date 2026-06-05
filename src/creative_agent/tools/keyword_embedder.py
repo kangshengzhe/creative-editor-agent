@@ -112,6 +112,7 @@ _NO_BOUNDARY_RANGES: tuple[tuple[int, int], ...] = (
     (0x08A0, 0x08FF),   # Arabic Extended-A
     (0xFB50, 0xFDFF),   # Arabic Presentation Forms-A
     (0xFE70, 0xFEFF),   # Arabic Presentation Forms-B
+    (0x0900, 0x097F),   # Devanagari (Hindi — inflected, no reliable \b stems)
 )
 
 
@@ -129,6 +130,186 @@ def _uses_substring_matching(keyword: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Cyrillic stem-prefix matching (Russian / Kazakh — heavily inflected)
+# ---------------------------------------------------------------------------
+#
+# Cyrillic languages are space-separated, but Russian nouns decline through 6
+# cases, so a keyword almost never appears in its citation form inside real
+# copy: бонус ("bonus") shows up as бонусом / бонусе / бонуса, and пополнение
+# ("top-up") as пополнении / пополнения. Strict whole-word matching misses all
+# of these and over-reports "keyword missing". We therefore match a word that
+# STARTS WITH the keyword's stem (the keyword minus its inflectional ending),
+# allowing any Cyrillic case-ending to follow. The leading word boundary still
+# prevents matching mid-word, and requiring the stem (not a bare substring)
+# avoids matching unrelated short roots.
+
+_CYRILLIC_RE: re.Pattern[str] = re.compile(r"[\u0400-\u04FF\u0500-\u052F]")
+
+#: Trailing letters stripped to derive a Russian/Kazakh nominal stem. These are
+#: the common case-ending vowels and the soft/hard signs; we remove at most
+#: two so the stem stays specific enough not to over-match.
+_CYRILLIC_INFLECTION_TAIL: str = "аеёиоуыэюяьъ"
+
+
+def _is_cyrillic_keyword(keyword: str) -> bool:
+    """True iff ``keyword`` is written in Cyrillic script."""
+    return _CYRILLIC_RE.search(keyword) is not None
+
+
+def _cyrillic_stem(keyword: str) -> str:
+    """Derive a conservative stem by trimming up to two trailing inflection
+    letters, while keeping the stem reasonably specific (≥ 4 chars and ≥ 60%
+    of the original length)."""
+    kw = keyword.strip().lower()
+    min_len = max(4, int(len(kw) * 0.6))
+    stem = kw
+    removed = 0
+    while (
+        removed < 2
+        and len(stem) > min_len
+        and stem[-1] in _CYRILLIC_INFLECTION_TAIL
+    ):
+        stem = stem[:-1]
+        removed += 1
+    return stem
+
+
+def _cyrillic_stem_match(text: str, keyword: str) -> bool:
+    """Match a whole word in ``text`` that starts with ``keyword``'s stem,
+    allowing any Cyrillic case-ending to follow (handles declension)."""
+    stem = _cyrillic_stem(keyword)
+    if not stem:
+        return False
+    # Leading word boundary, the stem, then zero or more Cyrillic letters
+    # (the inflectional ending). Case-insensitive.
+    pattern = re.compile(
+        r"(?<!\w)" + re.escape(stem) + r"[\u0400-\u04FF\u0500-\u052F]*",
+        re.IGNORECASE,
+    )
+    return pattern.search(text) is not None
+
+
+def _cyrillic_stem_count(text: str, keyword: str) -> int:
+    """Count whole words in ``text`` whose stem matches ``keyword``'s."""
+    stem = _cyrillic_stem(keyword)
+    if not stem:
+        return 0
+    pattern = re.compile(
+        r"(?<!\w)" + re.escape(stem) + r"[\u0400-\u04FF\u0500-\u052F]*",
+        re.IGNORECASE,
+    )
+    return len(pattern.findall(text))
+
+
+# ---------------------------------------------------------------------------
+# Latin-script stem-prefix matching (inflected / agglutinative languages)
+# ---------------------------------------------------------------------------
+#
+# Latin script alone can't tell English (where "play" must NOT match "player")
+# apart from Spanish ("recarga" should match the plural "recargas") or Turkish
+# ("yükleme" should match the agglutinated "yüklemenizi"). We therefore route by
+# the request's TARGET LANGUAGE: English (and isolating Vietnamese) keep strict
+# whole-word matching; inflected/agglutinative Latin languages use stem-prefix
+# matching that allows trailing inflectional/affixal letters.
+#
+# Language codes (``Target_Language`` values) that should use loose Latin
+# stem-prefix matching. English ("en") and Vietnamese ("vi", isolating) are
+# deliberately excluded so they keep strict matching.
+_LATIN_SUFFIX_LANGUAGES: frozenset[str] = frozenset(
+    {
+        "es",       # Spanish — plural/gender inflection (recarga→recargas)
+        "pt-BR",    # Portuguese (Brazil)
+        "pt",       # Portuguese (generic)
+        "tr",       # Turkish — agglutinative suffixes
+    }
+)
+_LATIN_AFFIX_LANGUAGES: frozenset[str] = frozenset(
+    {
+        "id",       # Indonesian — prefix/circumfix (peng-…-an)
+        "ms",       # Malay — affixation
+        "fil",      # Filipino/Tagalog — prefix/infix (mag-, -um-)
+        "sw",       # Swahili — agglutinative prefixes
+    }
+)
+
+#: Trailing Latin letters trimmed to derive a stem for inflected/agglutinative
+#: languages. Kept conservative (mostly vowels + plural/affix consonants).
+_LATIN_INFLECTION_TAIL: str = "aeiouszrnmlkt"
+
+
+def _is_latin_keyword(keyword: str) -> bool:
+    """True iff ``keyword`` is purely Latin-script letters (with marks)."""
+    has_letter = False
+    for ch in keyword:
+        if ch.isspace() or not ch.isalpha():
+            continue
+        cp = ord(ch)
+        # Basic Latin + Latin-1 + Latin Extended-A/B ranges.
+        if (
+            0x0041 <= cp <= 0x024F
+            or 0x1E00 <= cp <= 0x1EFF  # Latin Extended Additional (Vietnamese)
+        ):
+            has_letter = True
+        else:
+            return False
+    return has_letter
+
+
+def _latin_stem(keyword: str) -> str:
+    """Trim up to two trailing inflection letters to derive a Latin stem,
+    keeping it specific (≥ 4 chars and ≥ 70% of the original length)."""
+    kw = keyword.strip().lower()
+    min_len = max(4, int(len(kw) * 0.7))
+    stem = kw
+    removed = 0
+    while (
+        removed < 2
+        and len(stem) > min_len
+        and stem[-1] in _LATIN_INFLECTION_TAIL
+    ):
+        stem = stem[:-1]
+        removed += 1
+    return stem
+
+
+def _latin_suffix_match(text: str, keyword: str) -> bool:
+    """Match a whole word in ``text`` that STARTS WITH ``keyword``'s Latin
+    stem, allowing trailing word characters (plural/suffix inflection)."""
+    stem = _latin_stem(keyword)
+    if not stem:
+        return False
+    pattern = re.compile(r"(?<!\w)" + re.escape(stem) + r"\w*", re.IGNORECASE)
+    return pattern.search(text) is not None
+
+
+def _latin_suffix_count(text: str, keyword: str) -> int:
+    """Count whole words in ``text`` starting with ``keyword``'s Latin stem."""
+    stem = _latin_stem(keyword)
+    if not stem:
+        return 0
+    pattern = re.compile(r"(?<!\w)" + re.escape(stem) + r"\w*", re.IGNORECASE)
+    return len(pattern.findall(text))
+
+
+def _latin_affix_match(text: str, keyword: str) -> bool:
+    """Match ``keyword``'s stem appearing ANYWHERE inside a word — handles
+    prefixing/circumfixing languages where the stem sits after a prefix
+    (Indonesian ``isi`` in ``pengisian``, Filipino ``karga`` in ``magkarga``)."""
+    stem = _latin_stem(keyword)
+    if not stem:
+        return False
+    return stem in text.lower()
+
+
+def _latin_affix_count(text: str, keyword: str) -> int:
+    """Count occurrences of ``keyword``'s stem as a substring (affix languages)."""
+    stem = _latin_stem(keyword)
+    if not stem:
+        return 0
+    return text.lower().count(stem)
+
+
 @dataclass
 class EmbedderInput:
     """Input contract mirroring design.md § Keyword_Embedder."""
@@ -139,28 +320,44 @@ class EmbedderInput:
     creative_type: Creative_Type
 
 
-def word_boundary_match(text: str, keyword: str) -> bool:
+def word_boundary_match(
+    text: str, keyword: str, language: Optional[str] = None
+) -> bool:
     """Return True iff ``keyword`` appears in ``text``.
 
-    Matching strategy is chosen from the keyword's writing system:
+    Matching strategy is chosen from the keyword's writing system and, for
+    Latin script, the request's ``language``:
 
-    * **Space-separated, non-fusional scripts** (Latin, Cyrillic, Greek …):
-      strict word-boundary match via negative lookbehind/lookahead on ``\\w``,
-      so e.g. ``"play"`` does not match inside ``"player"``.
-    * **No-space or fusional scripts** (CJK, Thai, Khmer, Arabic, Hangul …):
-      case-insensitive *substring* match, because these scripts write words
-      with no separators or fuse affixes onto stems (e.g. Arabic ``شحن`` inside
-      ``الشحن``, or Chinese ``充值`` inside ``立即充值``), so a boundary-based
-      match would wrongly report a present keyword as missing.
+    * **No-space / fusional / Devanagari scripts** (CJK, Thai, Khmer, Arabic,
+      Hangul, Hindi …): case-insensitive *substring* match, because these
+      scripts write words without separators or fuse affixes onto stems.
+    * **Cyrillic** (Russian, Kazakh — heavily inflected): *stem-prefix* match,
+      so a declined form (``бонус`` → ``бонусом``) still counts as present.
+    * **Inflected / agglutinative Latin languages** (Spanish, Portuguese,
+      Turkish, Indonesian, Malay, Filipino, Swahili — selected via
+      ``language``): Latin *stem-prefix* match, so ``recarga`` matches the
+      plural ``recargas`` and ``yükleme`` matches ``yüklemenizi``.
+    * **English / Vietnamese / unknown Latin**: strict word-boundary match via
+      negative lookbehind/lookahead on ``\\w``, so ``"play"`` does not match
+      inside ``"player"``.
 
-    Empty / whitespace-only keywords always return ``False`` so the caller's
-    coverage maths stays well-defined when an upstream component leaks blanks
-    into the keyword list.
+    ``language`` is the request's target-language code (a ``Target_Language``
+    value such as ``"es"`` / ``"tr"``); when omitted, Latin keywords default to
+    strict matching (English-safe).
+
+    Empty / whitespace-only keywords always return ``False``.
     """
     if not keyword or not keyword.strip():
         return False
     if _uses_substring_matching(keyword):
         return keyword.lower() in text.lower()
+    if _is_cyrillic_keyword(keyword):
+        return _cyrillic_stem_match(text, keyword)
+    if language and _is_latin_keyword(keyword):
+        if language in _LATIN_SUFFIX_LANGUAGES:
+            return _latin_suffix_match(text, keyword)
+        if language in _LATIN_AFFIX_LANGUAGES:
+            return _latin_affix_match(text, keyword)
     pattern = re.compile(
         r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
         re.IGNORECASE,
@@ -168,12 +365,21 @@ def word_boundary_match(text: str, keyword: str) -> bool:
     return pattern.search(text) is not None
 
 
-def _count_keyword_hits(text: str, keyword: str) -> int:
+def _count_keyword_hits(
+    text: str, keyword: str, language: Optional[str] = None
+) -> int:
     """Count occurrences of ``keyword`` in ``text`` (strategy as above)."""
     if not keyword or not keyword.strip():
         return 0
     if _uses_substring_matching(keyword):
         return text.lower().count(keyword.lower())
+    if _is_cyrillic_keyword(keyword):
+        return _cyrillic_stem_count(text, keyword)
+    if language and _is_latin_keyword(keyword):
+        if language in _LATIN_SUFFIX_LANGUAGES:
+            return _latin_suffix_count(text, keyword)
+        if language in _LATIN_AFFIX_LANGUAGES:
+            return _latin_affix_count(text, keyword)
     pattern = re.compile(
         r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
         re.IGNORECASE,
@@ -217,8 +423,16 @@ class KeywordEmbedder:
         keywords: list[str],
         platform_spec: Platform_Spec,
         creative_type: Creative_Type,
+        language: Optional[str] = None,
     ) -> EmbedderOutput:
-        """Embed missing keywords into ``copy`` and report coverage."""
+        """Embed missing keywords into ``copy`` and report coverage.
+
+        ``language`` is the request's target-language code (a
+        ``Target_Language`` value); it selects the keyword-matching strategy
+        for Latin-script languages (e.g. Spanish/Turkish use stem-prefix
+        matching, English stays strict). When omitted, Latin keywords default
+        to strict matching.
+        """
         start = time.perf_counter()
 
         # Empty keyword list → coverage 1.0, copy unchanged (Req 5.8).
@@ -259,6 +473,7 @@ class KeywordEmbedder:
                     keywords=normalised,
                     platform_spec=platform_spec,
                     creative_type=creative_type,
+                    language=language,
                 ),
                 timeout=_DEFAULT_TIMEOUT_S,
             )
@@ -301,6 +516,7 @@ class KeywordEmbedder:
         keywords: list[str],
         platform_spec: Platform_Spec,
         creative_type: Creative_Type,
+        language: Optional[str] = None,
     ) -> EmbedderOutput:
         char_limit = platform_spec.char_limit(creative_type)
 
@@ -319,7 +535,7 @@ class KeywordEmbedder:
             )
 
         # Step 1: classify which keywords are already covered (Req 5.5).
-        already_hit, missing = self._classify_hits(copy, keywords)
+        already_hit, missing = self._classify_hits(copy, keywords, language)
 
         # Optimisation: nothing to embed.
         if not missing:
@@ -341,7 +557,7 @@ class KeywordEmbedder:
         embedded_copy = copy
 
         # Skip LLM rewrite entirely — just report coverage as-is.
-        final_hits, _final_missing = self._classify_hits(copy, keywords)
+        final_hits, _final_missing = self._classify_hits(copy, keywords, language)
         final_skipped = [kw for kw in keywords if kw not in final_hits]
         coverage = len(final_hits) / len(keywords)
 
@@ -423,18 +639,19 @@ class KeywordEmbedder:
 
     @staticmethod
     def _classify_hits(
-        copy: str, keywords: list[str]
+        copy: str, keywords: list[str], language: Optional[str] = None
     ) -> tuple[list[str], list[str]]:
         """Split ``keywords`` into ``(hit, missing)`` against ``copy``.
 
-        Preserves caller-supplied order in both lists. Duplicates in
-        ``keywords`` are kept so the coverage denominator matches the
-        request.
+        ``language`` selects the per-keyword matching strategy (see
+        :func:`word_boundary_match`). Preserves caller-supplied order in both
+        lists. Duplicates in ``keywords`` are kept so the coverage denominator
+        matches the request.
         """
         hit: list[str] = []
         missing: list[str] = []
         for kw in keywords:
-            if word_boundary_match(copy, kw):
+            if word_boundary_match(copy, kw, language):
                 hit.append(kw)
             else:
                 missing.append(kw)
