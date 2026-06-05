@@ -158,23 +158,23 @@ textarea{resize:vertical;min-height:60px}
         <label>SEO 关键词（逗号分隔）</label>
         <input type="text" id="keywords" placeholder="topup, bonus" value="topup">
       </div>
-      <div class="form-group full">
+      <div class="form-group">
         <label>卖点（逗号分隔）</label>
         <input type="text" id="sellingPoints" placeholder="20% bonus, instant credit" value="20% bonus, instant credit">
       </div>
 
-      <!-- 高级约束（可选）：像给 AI 加备注一样控制生成 -->
-      <div class="form-group full">
+      <!-- 高级约束（可选）：像给 AI 加备注一样控制生成。两列布局，充分利用横向空间 -->
+      <div class="form-group">
         <label>必须包含的短语（逗号分隔，可选）</label>
         <input type="text" id="mustInclude" placeholder="例如：限时, 官方">
       </div>
-      <div class="form-group full">
-        <label>必须规避的词（逗号分隔，可选）— 被审核误判的词填这里，输出会彻底避开</label>
+      <div class="form-group">
+        <label>必须规避的词（逗号分隔，可选）</label>
         <input type="text" id="mustAvoid" placeholder="例如：guaranteed, jackpot">
       </div>
-      <div class="form-group full">
+      <div class="form-group">
         <label>额外备注 / 创作要求（可选）— 像跟 AI 说话一样</label>
-        <textarea id="extraInstructions" rows="2" placeholder="例如：语气更活泼，规避赌博联想，强调安全合规"></textarea>
+        <input type="text" id="extraInstructions" placeholder="例如：语气更活泼，强调安全合规">
       </div>
 
       <div style="grid-column:1/-1;display:flex;justify-content:center;gap:12px;margin-top:20px">
@@ -250,10 +250,10 @@ form.addEventListener('submit', async (e) => {
   submitBtn.disabled = true;
   document.getElementById('regenBtn').disabled = true;
   document.getElementById('abortBtn').style.display = 'inline-block';
-  submitBtn.textContent = isBatch ? '⏳ 批量生成中（约 60-100 秒）...' : '⏳ 生成中...';
+  submitBtn.textContent = isBatch ? '⏳ 批量生成中（约 30-50 秒）...' : '⏳ 生成中...';
   statusEl.textContent = isBatch
-    ? '正在生成 标题 + 描述 + CTA 三种类型，预计 60-100 秒（标题 15 条最耗时，实际时长视网络与模型响应而定）...'
-    : '正在调用 AI 生成广告创意，预计 20-90 秒（视文案类型与数量而定）...';
+    ? '正在生成 标题 + 描述 + CTA 三种类型，预计 30-50 秒（实际时长视网络与模型响应而定）...'
+    : '正在调用 AI 生成广告创意，预计 15-40 秒（视文案类型与数量而定）...';
   statusEl.className = 'status';
   resultsCard.style.display = 'none';
   resultsList.innerHTML = '';
