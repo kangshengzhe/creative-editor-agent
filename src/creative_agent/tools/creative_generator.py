@@ -1307,7 +1307,13 @@ class CreativeGenerator:
         angle_label: Optional[str] = None,
         start_index: int = 0,
     ) -> list[Creative_Candidate]:
-        """Truncate, dedupe (incl. ``exclude_copies``), and build candidates.
+        """Dedupe, build candidates, and prefer complete in-limit copies.
+
+        Fit-first policy (方案 4): a copy the LLM wrote WITHIN ``char_limit`` is
+        a complete sentence and is always kept; a copy that OVERFLOWS is only
+        kept (word-boundary truncated) when this call produced no fitting copy
+        at all, so the ad group is filled with complete sentences in the normal
+        case and truncation is a rare last resort.
 
         ``generation_language`` is stamped onto every built candidate's
         ``generation_language`` field (Req 1.1) — the market's primary language
@@ -1322,12 +1328,11 @@ class CreativeGenerator:
         Char-limit enforcement honours Display_Units for CJK markets (Req 4.8 /
         4.9): a market-level flag (CJK market or display-width Platform_Spec) is
         OR'd per copy with a wide-character check, so even a non-CJK market gets
-        Display_Unit truncation for copy that contains CJK characters, while
+        Display_Unit handling for copy that contains CJK characters, while
         pure-ASCII English flows keep ``len()`` semantics unchanged.
         """
         seen_norm: set[str] = {self._normalise(c) for c in excludes if c}
         seen_norm.discard("")  # an empty exclude must not block real copies
-        accepted_texts: list[str] = []
 
         # Hard must-avoid filter (requirement 6): operators can ban words this
         # run (e.g. a term an ad platform mis-flagged). The prompt asks the LLM
@@ -1345,25 +1350,65 @@ class CreativeGenerator:
         # characters opt in even when the market itself does not (Req 4.8).
         market_display_width = _should_use_display_width(brief, platform_spec)
 
+        def _banned(text: str) -> bool:
+            if not must_avoid:
+                return False
+            lowered = text.lower()
+            return any(b in lowered for b in must_avoid)
+
+        # Fit-first strategy (no hard mid-sentence cuts). A copy the LLM already
+        # wrote WITHIN the limit is a complete, well-formed sentence — always
+        # preferred. A copy that OVERFLOWS would have to be truncated, which
+        # leaves a clipped/awkward fragment; we keep those only as a fallback so
+        # a call never returns empty. The orchestrator overshoots (~1.7x) and
+        # refills, so dropping over-limit copies still fills the ad group with
+        # complete sentences in the normal case. Truncation (word-boundary,
+        # never mid-word) thus only surfaces when an entire call produced
+        # nothing that fits — a rare last resort.
+        accepted_texts: list[str] = []      # complete, within-limit copies
+        fallback_texts: list[str] = []      # word-boundary-truncated overflow
+
         for raw in raw_copies:
             use_display_width = market_display_width or _should_use_display_width(
                 brief, platform_spec, raw
             )
-            truncated = self._truncate(
-                raw, char_limit, use_display_width=use_display_width
-            )
-            if not truncated:
+            stripped = raw.strip()
+            if not stripped or _banned(stripped):
                 continue
-            # Drop candidates that contain any operator-banned phrase.
-            if must_avoid:
-                lowered = truncated.lower()
-                if any(banned in lowered for banned in must_avoid):
+
+            if self._fits_within(stripped, char_limit, use_display_width):
+                norm = self._normalise(stripped)
+                if not norm or norm in seen_norm:
                     continue
+                seen_norm.add(norm)
+                accepted_texts.append(stripped)
+                continue
+
+            # Overflow → prepare a word-boundary-truncated fallback (used only
+            # if this call yields no fitting copy at all).
+            truncated = self._truncate(
+                stripped, char_limit, use_display_width=use_display_width
+            )
+            if not truncated or _banned(truncated):
+                continue
             norm = self._normalise(truncated)
             if not norm or norm in seen_norm:
                 continue
-            seen_norm.add(norm)
-            accepted_texts.append(truncated)
+            # Don't register the fallback's norm in ``seen_norm`` yet — a later
+            # fitting copy that normalises the same should still win.
+            fallback_texts.append(truncated)
+
+        # Prefer complete sentences; only fall back to truncated copy when this
+        # call produced none that fit (so the call isn't empty and generation
+        # can still progress). Dedup the fallbacks against accepted norms.
+        final_texts = list(accepted_texts)
+        if not final_texts and fallback_texts:
+            for text in fallback_texts:
+                norm = self._normalise(text)
+                if not norm or norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+                final_texts.append(text)
 
         return [
             self._build_candidate(
@@ -1374,7 +1419,7 @@ class CreativeGenerator:
                 generation_language=generation_language,
                 angle_label=angle_label,
             )
-            for i, text in enumerate(accepted_texts)
+            for i, text in enumerate(final_texts)
         ]
 
     # ------------------------------------------------------------------
@@ -1435,7 +1480,9 @@ class CreativeGenerator:
             "返回严格的 JSON 对象，结构示例：\n"
             '{"candidates": [{"copy": "..."}, {"copy": "..."}, ...]}\n\n'
             "硬性要求：\n"
-            f"1. 每条 copy 的字符长度必须 ≤ {char_limit}。\n"
+            f"1. 每条 copy 的字符长度必须 ≤ {char_limit}，且必须是**语义完整的句子**。"
+            f"宁可写短一些（例如 {max(char_limit - 8, 1)} 字符左右）也不要写到接近上限后被截断；"
+            "绝对不要输出会被截断的半句话或残缺结尾。\n"
             f"2. 文案必须符合 {brief.target_platform.value} 平台的风格规范。\n"
             "3. 候选之间在角度 / 语气 / 卖点切入上必须有明显差异。\n"
             f"4. 使用 {output_language} 作为输出语言。\n"
@@ -1532,19 +1579,45 @@ class CreativeGenerator:
         return " ".join(translated.split())
 
     @staticmethod
+    def _fits_within(
+        text: str, char_limit: int, use_display_width: bool = False
+    ) -> bool:
+        """Return True iff ``text`` is already within ``char_limit``.
+
+        Uses Display_Unit width for CJK / wide-character copy (Req 4.8) and a
+        plain ``len()`` count otherwise — mirroring :meth:`_truncate` so the
+        "fits" check and the truncation use the same yardstick.
+        """
+        stripped = text.strip()
+        if char_limit <= 0:
+            return False
+        if use_display_width:
+            return _DISPLAY_WIDTH.fits_within_limit(stripped, char_limit)
+        return len(stripped) <= char_limit
+
+    @staticmethod
     def _truncate(
         text: str, char_limit: int, *, use_display_width: bool = False
     ) -> str:
-        """Hard-truncate ``text`` to ``char_limit``.
+        """Hard-truncate ``text`` to ``char_limit`` without splitting words.
 
-        When ``use_display_width`` is False (the default, non-CJK flows) the
-        limit is a raw character count enforced with ``len()`` and slicing —
-        byte-for-byte the original behaviour. When ``use_display_width`` is True
-        (CJK markets or copy containing wide characters, Req 4.8 / 4.9) the
-        limit is a Display_Unit count enforced via the
-        :class:`DisplayWidthCalculator`, which removes whole characters from the
-        end until the total width fits and never splits a multi-byte sequence
-        or surrogate pair.
+        When ``use_display_width`` is True (CJK markets or copy containing wide
+        characters, Req 4.8 / 4.9) the limit is a Display_Unit count enforced
+        via the :class:`DisplayWidthCalculator`, which removes whole characters
+        from the end until the total width fits. CJK / no-space scripts have no
+        inter-word spaces, so character-level truncation never produces a
+        partial "word" — this path is unchanged.
+
+        When ``use_display_width`` is False (space-separated scripts such as
+        English / Spanish / Arabic) the limit is a raw character count. A naive
+        ``text[:limit]`` slice would cut mid-word (e.g. "20% more value, s" or
+        "Your Topup Bo"), which no real ad would ship. We therefore retreat to
+        the last whole-word boundary that fits and strip any dangling
+        punctuation, so the result is always composed of complete words — at
+        the cost of landing a few characters under the limit when the final
+        word doesn't fit. If the limit is so small that not even the first word
+        fits, we fall back to a hard slice (better a clipped single word than
+        an empty string).
         """
         if char_limit <= 0:
             return ""
@@ -1555,7 +1628,33 @@ class CreativeGenerator:
             return _DISPLAY_WIDTH.truncate_to_width(stripped, char_limit).rstrip()
         if len(stripped) <= char_limit:
             return stripped
-        return stripped[:char_limit].rstrip()
+        return CreativeGenerator._truncate_on_word_boundary(stripped, char_limit)
+
+    @staticmethod
+    def _truncate_on_word_boundary(text: str, char_limit: int) -> str:
+        """Truncate ``text`` to ``char_limit`` chars without splitting a word.
+
+        Assumes a space-separated script. Retreats to the last full word that
+        fits and trims trailing separator punctuation (commas, dashes, etc.).
+        Falls back to a hard slice when the first word alone exceeds the limit.
+        """
+        window = text[:char_limit]
+        # If the character right after the cut is part of the same word (both
+        # sides are word characters), the slice landed mid-word — drop the
+        # partial trailing word by cutting at the last whitespace in ``window``.
+        cut_is_mid_word = (
+            len(text) > char_limit
+            and not text[char_limit - 1].isspace()
+            and not text[char_limit].isspace()
+        )
+        if cut_is_mid_word:
+            last_space = window.rfind(" ")
+            if last_space > 0:
+                window = window[:last_space]
+            # else: the whole window is one long word → keep the hard slice.
+        # Trim trailing whitespace and dangling separator punctuation so the
+        # copy doesn't end on a stray "," / "-" / "—" / etc.
+        return window.rstrip().rstrip(",;:-—–·/&+ ").rstrip()
 
     @staticmethod
     def _build_candidate(
