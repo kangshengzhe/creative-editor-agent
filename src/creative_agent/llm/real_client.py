@@ -115,6 +115,19 @@ class RealLLMClient(LLMClient):
             keepalive_expiry=30.0,
         )
 
+        # Reasoning ("thinking") mode toggle. New-generation models (Qwen3.x,
+        # DeepSeek V4, …) default to a deep-thinking mode that emits a long
+        # hidden <think> block BEFORE the answer. With dozens of LLM calls per
+        # generation that overhead is catastrophic — runs that took ~66s on the
+        # non-thinking qwen-plus stall past 5 minutes (and may hit our timeout).
+        # We produce many short ad copies, not multi-step reasoning, so thinking
+        # is off by default. Override with ENABLE_THINKING=true in .env if a
+        # future task genuinely needs step-by-step reasoning.
+        self._enable_thinking: bool = (
+            os.getenv("ENABLE_THINKING", "false").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+
     # ------------------------------------------------------------------
     # Public API (LLMClient)
     # ------------------------------------------------------------------
@@ -185,12 +198,20 @@ class RealLLMClient(LLMClient):
         if system is not None:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        return {
+        payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # Disable the model's deep-thinking/reasoning mode unless explicitly
+        # enabled. DashScope's OpenAI-compatible endpoint reads this top-level
+        # flag and ignores it harmlessly for models that don't support
+        # thinking, so it is safe to always send. Keeping it off prevents
+        # new-gen models (Qwen3.x, DeepSeek V4) from emitting a long hidden
+        # <think> block before each of our many short generation calls.
+        payload["enable_thinking"] = self._enable_thinking
+        return payload
 
     def _get_client(self) -> httpx.AsyncClient:
         """Return the shared pooled client, creating it on first use.
