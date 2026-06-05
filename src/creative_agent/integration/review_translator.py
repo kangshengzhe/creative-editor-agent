@@ -14,7 +14,9 @@ Performance
 -----------
 All copies of a request are translated in ONE batched ``complete_json`` call
 (not per-candidate), so the cost is a single extra LLM round-trip per creative
-type rather than dozens. Failures degrade gracefully to an empty map — the
+type rather than dozens. If the model omits some items (LLMs reliably drop the
+trailing entry of a long numbered list), a single follow-up call re-requests
+only the missing indices. Failures degrade gracefully to an empty map — the
 review aid is best-effort and never blocks delivery.
 """
 
@@ -68,7 +70,14 @@ class ReviewTranslator:
         copy_is_english: bool,
         request_id: Optional[str] = None,
     ) -> list[dict[str, str]]:
-        """Translate ``copies`` into the review languages, one batched call.
+        """Translate ``copies`` into the review languages.
+
+        Issues one batched LLM call for the whole set, then makes a single
+        follow-up call to fill in any items the model omitted. LLMs reliably
+        drop the *last* numbered entry (and occasionally others) from long
+        batch lists, which previously left the final headline / description
+        without a review translation. The patch-up pass re-requests only the
+        missing indices so the returned list is complete.
 
         Args:
             copies: The delivered candidate source copies, in order.
@@ -85,11 +94,55 @@ class ReviewTranslator:
             return []
 
         languages = [lang for lang in REVIEW_LANGUAGES if not (lang == "en" and copy_is_english)]
+
+        result = await self._translate_batch(
+            copies, languages, request_id=request_id
+        )
+
+        # Patch-up pass: LLMs routinely omit the trailing entry of a long
+        # numbered list, so re-request only the indices that came back empty.
+        missing = [i for i, langs in enumerate(result) if not langs]
+        if missing:
+            self._log.warning(
+                "review_translator.missing_items",
+                request_id=request_id,
+                missing_count=len(missing),
+                total=len(copies),
+                indices=missing,
+            )
+            retry_copies = [copies[i] for i in missing]
+            retry = await self._translate_batch(
+                retry_copies, languages, request_id=request_id
+            )
+            for missing_idx, langs in zip(missing, retry):
+                if langs:
+                    result[missing_idx] = langs
+
+        return result
+
+    async def _translate_batch(
+        self,
+        copies: list[str],
+        languages: list[str],
+        *,
+        request_id: Optional[str] = None,
+    ) -> list[dict[str, str]]:
+        """One batched ``complete_json`` call for ``copies`` → per-copy maps.
+
+        Returns a list parallel to ``copies`` (empty dict where the model
+        omitted an item). Never raises — failures degrade to all-empty.
+        """
         empty: list[dict[str, str]] = [{} for _ in copies]
+        if not copies:
+            return empty
 
         numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(copies))
         prompt = (
             f"Review languages requested: {', '.join(languages)}\n\n"
+            f"There are EXACTLY {len(copies)} ad copies below, indexed 0 to "
+            f"{len(copies) - 1}. You MUST return one entry for EVERY index, "
+            f"including the last one (index {len(copies) - 1}). Do not stop "
+            "early.\n\n"
             "Translate each of these ad copies into the requested review "
             "languages:\n"
             f"{numbered}"
