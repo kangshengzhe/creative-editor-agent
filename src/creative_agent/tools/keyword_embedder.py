@@ -67,6 +67,67 @@ _LLM_TEMPERATURE: float = 0.4
 # Maximum LLM attempts (1 initial + 1 retry with fewer keywords).
 _MAX_LLM_ATTEMPTS: int = 3
 
+# ---------------------------------------------------------------------------
+# Keyword matching strategy by writing system
+# ---------------------------------------------------------------------------
+#
+# Strict ``\b``/``\w``-boundary matching only works for languages that separate
+# words with spaces and don't fuse affixes onto stems (English, Spanish,
+# Russian, …). Two large families break that assumption and need substring
+# matching instead, otherwise a keyword that is clearly present is wrongly
+# reported missing:
+#
+#   1. No-space scripts — CJK (Chinese/Japanese), Thai, Khmer, Lao, Myanmar:
+#      words are written with no separators at all, so a keyword is almost
+#      never on a ``\b`` boundary.
+#   2. Fusional/clitic scripts — Arabic: the definite article ال and clitic
+#      prepositions/conjunctions attach to the following word (شحن → الشحن).
+#
+# For these scripts substring matching is safe: unlike Latin ("play" inside
+# "player"), a CJK/Thai/Arabic keyword appearing as a character subsequence
+# genuinely conveys the keyword. Korean Hangul has spaces but fuses particles,
+# so it is treated as substring too. Latin/Cyrillic/Greek keep strict matching
+# to preserve the "play ≠ player" guard.
+#
+# The strategy is chosen from the KEYWORD's own characters (self-contained — no
+# language code needed at the call site). A keyword mixing scripts (e.g. a CJK
+# word with a Latin brand token) counts as substring if ANY char is from a
+# no-boundary script, since the boundary concept doesn't apply to it.
+
+#: Unicode ranges whose presence in a keyword switches matching to substring
+#: mode. Each tuple is an inclusive (low, high) code-point range.
+_NO_BOUNDARY_RANGES: tuple[tuple[int, int], ...] = (
+    (0x4E00, 0x9FFF),   # CJK Unified Ideographs (Chinese / Kanji)
+    (0x3400, 0x4DBF),   # CJK Extension A
+    (0x3040, 0x309F),   # Hiragana
+    (0x30A0, 0x30FF),   # Katakana
+    (0xAC00, 0xD7AF),   # Hangul syllables (Korean — has spaces but fuses particles)
+    (0x1100, 0x11FF),   # Hangul Jamo
+    (0x0E00, 0x0E7F),   # Thai
+    (0x0E80, 0x0EFF),   # Lao
+    (0x1780, 0x17FF),   # Khmer
+    (0x1000, 0x109F),   # Myanmar
+    (0x0600, 0x06FF),   # Arabic
+    (0x0750, 0x077F),   # Arabic Supplement
+    (0x08A0, 0x08FF),   # Arabic Extended-A
+    (0xFB50, 0xFDFF),   # Arabic Presentation Forms-A
+    (0xFE70, 0xFEFF),   # Arabic Presentation Forms-B
+)
+
+
+def _uses_substring_matching(keyword: str) -> bool:
+    """True iff ``keyword`` belongs to a no-space / fusional script.
+
+    Such scripts (CJK, Thai, Khmer, Arabic, Hangul, …) cannot rely on word
+    boundaries, so the keyword is matched as a plain substring.
+    """
+    for ch in keyword:
+        cp = ord(ch)
+        for low, high in _NO_BOUNDARY_RANGES:
+            if low <= cp <= high:
+                return True
+    return False
+
 
 @dataclass
 class EmbedderInput:
@@ -79,18 +140,27 @@ class EmbedderInput:
 
 
 def word_boundary_match(text: str, keyword: str) -> bool:
-    """Return True iff ``keyword`` appears in ``text`` at a word boundary.
+    """Return True iff ``keyword`` appears in ``text``.
 
-    Case-insensitive, Unicode-aware. Uses a Python-style negative lookbehind
-    / lookahead on the ``\\w`` class so neighbouring word characters disqualify
-    a match (e.g. searching for ``"play"`` does not match ``"player"``).
+    Matching strategy is chosen from the keyword's writing system:
+
+    * **Space-separated, non-fusional scripts** (Latin, Cyrillic, Greek …):
+      strict word-boundary match via negative lookbehind/lookahead on ``\\w``,
+      so e.g. ``"play"`` does not match inside ``"player"``.
+    * **No-space or fusional scripts** (CJK, Thai, Khmer, Arabic, Hangul …):
+      case-insensitive *substring* match, because these scripts write words
+      with no separators or fuse affixes onto stems (e.g. Arabic ``شحن`` inside
+      ``الشحن``, or Chinese ``充值`` inside ``立即充值``), so a boundary-based
+      match would wrongly report a present keyword as missing.
 
     Empty / whitespace-only keywords always return ``False`` so the caller's
-    coverage maths stays well-defined when an upstream component leaks
-    blanks into the keyword list.
+    coverage maths stays well-defined when an upstream component leaks blanks
+    into the keyword list.
     """
     if not keyword or not keyword.strip():
         return False
+    if _uses_substring_matching(keyword):
+        return keyword.lower() in text.lower()
     pattern = re.compile(
         r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
         re.IGNORECASE,
@@ -99,9 +169,11 @@ def word_boundary_match(text: str, keyword: str) -> bool:
 
 
 def _count_keyword_hits(text: str, keyword: str) -> int:
-    """Count word-boundary occurrences of ``keyword`` in ``text``."""
+    """Count occurrences of ``keyword`` in ``text`` (strategy as above)."""
     if not keyword or not keyword.strip():
         return 0
+    if _uses_substring_matching(keyword):
+        return text.lower().count(keyword.lower())
     pattern = re.compile(
         r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
         re.IGNORECASE,
