@@ -1,8 +1,8 @@
 """Unit tests for the Ad-Group Quota (Requirement 5).
 
 Verifies that a single creative request drives generation toward the per-type
-Target_Count — 15 headlines, 10 descriptions, 5 for CTA/long copy — and that
-the AB_Ranking reports that target so consumers can detect under-fill.
+Target_Count — 20 headlines, 15 descriptions, 10 CTAs, 5 for long copy — and
+that the AB_Ranking reports that target so consumers can detect under-fill.
 
 Covered acceptance criteria:
 
@@ -206,9 +206,9 @@ def _build_orchestrator(generator, trace_dir) -> Orchestrator:
 
 class TestQuotaMapping:
     def test_target_count_per_type(self) -> None:
-        assert target_count_for(Creative_Type.HEADLINE) == 15
-        assert target_count_for(Creative_Type.DESCRIPTION) == 10
-        assert target_count_for(Creative_Type.CTA) == 5
+        assert target_count_for(Creative_Type.HEADLINE) == 20
+        assert target_count_for(Creative_Type.DESCRIPTION) == 15
+        assert target_count_for(Creative_Type.CTA) == 10
         assert target_count_for(Creative_Type.LONG_COPY) == 5
 
 
@@ -218,8 +218,8 @@ class TestQuotaMapping:
 
 
 class TestQuotaDrivesGeneration:
-    async def test_headline_targets_15(self, tmp_path) -> None:
-        gen = _CountingGenerator(creative_type=Creative_Type.HEADLINE, per_call=6)
+    async def test_headline_targets_20(self, tmp_path) -> None:
+        gen = _CountingGenerator(creative_type=Creative_Type.HEADLINE, per_call=10)
         orch = _build_orchestrator(gen, tmp_path)
 
         ranking = await orch.orchestrate(
@@ -228,29 +228,28 @@ class TestQuotaDrivesGeneration:
 
         # 5.2: generation is driven to AT LEAST the quota. The orchestrator
         # overshoots (~1.7x) so semantic/compliance dedup losses still leave a
-        # full ad group; the delivered set is truncated back to exactly 15.
-        assert gen.observed_min_counts[0] >= 15
+        # full ad group; the delivered set is truncated back to exactly 20.
+        assert gen.observed_min_counts[0] >= 20
         # 5.7: the ranking reports the target.
-        assert ranking.target_count == 15
-        # Delivered set is truncated to exactly the platform cap of 15, even
-        # though the generator can overshoot (6 per call across rounds).
-        assert len(ranking.ranked_candidates) == 15
+        assert ranking.target_count == 20
+        # Delivered set is truncated to exactly the quota of 20.
+        assert len(ranking.ranked_candidates) == 20
         # No under-fill warning when the target is met.
         assert not any("under-filled" in w for w in ranking.warnings)
 
-    async def test_description_targets_10(self, tmp_path) -> None:
-        gen = _CountingGenerator(creative_type=Creative_Type.DESCRIPTION, per_call=4)
+    async def test_description_targets_15(self, tmp_path) -> None:
+        gen = _CountingGenerator(creative_type=Creative_Type.DESCRIPTION, per_call=8)
         orch = _build_orchestrator(gen, tmp_path)
 
         ranking = await orch.orchestrate(
             _make_brief(Creative_Type.DESCRIPTION), request_id="req-desc"
         )
 
-        assert gen.observed_min_counts[0] >= 10
-        assert ranking.target_count == 10
-        assert len(ranking.ranked_candidates) == 10
+        assert gen.observed_min_counts[0] >= 15
+        assert ranking.target_count == 15
+        assert len(ranking.ranked_candidates) == 15
 
-    async def test_cta_keeps_default_5(self, tmp_path) -> None:
+    async def test_cta_targets_10(self, tmp_path) -> None:
         gen = _CountingGenerator(creative_type=Creative_Type.CTA, per_call=6)
         orch = _build_orchestrator(gen, tmp_path)
 
@@ -258,26 +257,26 @@ class TestQuotaDrivesGeneration:
             _make_brief(Creative_Type.CTA), request_id="req-cta"
         )
 
-        assert ranking.target_count == 5
-        assert len(ranking.ranked_candidates) == 5
+        assert ranking.target_count == 10
+        assert len(ranking.ranked_candidates) == 10
 
     async def test_overshoot_truncated_to_exact_target(self, tmp_path) -> None:
-        """Generator overshoots (per_call=6 → first round yields 18 for a 15
-        target); the delivered set is truncated to exactly 15 (platform cap),
-        and total_candidates_generated still records the full pre-truncation
-        count so the optimise-then-select pool is observable."""
-        gen = _CountingGenerator(creative_type=Creative_Type.HEADLINE, per_call=18)
+        """Generator overshoots (per_call=25 → first round yields 25 for a 20
+        target); the delivered set is truncated to exactly 20, and
+        total_candidates_generated still records the full pre-truncation count
+        so the optimise-then-select pool is observable."""
+        gen = _CountingGenerator(creative_type=Creative_Type.HEADLINE, per_call=25)
         orch = _build_orchestrator(gen, tmp_path)
 
         ranking = await orch.orchestrate(
             _make_brief(Creative_Type.HEADLINE), request_id="req-overshoot"
         )
 
-        assert len(ranking.ranked_candidates) == 15
-        assert ranking.target_count == 15
-        # 18 were generated; only the top 15 are delivered. The surplus is not
+        assert len(ranking.ranked_candidates) == 20
+        assert ranking.target_count == 20
+        # 25 were generated; only the top 20 are delivered. The surplus is not
         # counted as BLOCK filtering.
-        assert ranking.total_candidates_generated == 18
+        assert ranking.total_candidates_generated == 25
         assert ranking.total_candidates_filtered_out == 0
 
 
@@ -308,7 +307,7 @@ class TestQuotaOverride:
 
 class TestUnderFill:
     async def test_under_fill_returns_partial_with_warning(self, tmp_path) -> None:
-        # cap=6 means the (fake) LLM can never reach the 15 target, but stays
+        # cap=6 means the (fake) LLM can never reach the 20 target, but stays
         # above the viability floor of 3 → partial result + warning, no error.
         gen = _CountingGenerator(creative_type=Creative_Type.HEADLINE, per_call=6, cap=6)
         orch = _build_orchestrator(gen, tmp_path)
@@ -317,8 +316,8 @@ class TestUnderFill:
             _make_brief(Creative_Type.HEADLINE), request_id="req-underfill"
         )
 
-        assert ranking.target_count == 15
-        assert 3 <= len(ranking.ranked_candidates) < 15
+        assert ranking.target_count == 20
+        assert 3 <= len(ranking.ranked_candidates) < 20
         assert any("under-filled" in w for w in ranking.warnings)
         # refill_count must respect the AB_Ranking le=2 cap even though the
         # target was never reached across all rounds.
