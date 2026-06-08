@@ -250,9 +250,9 @@ form.addEventListener('submit', async (e) => {
   submitBtn.disabled = true;
   document.getElementById('regenBtn').disabled = true;
   document.getElementById('abortBtn').style.display = 'inline-block';
-  submitBtn.textContent = isBatch ? '⏳ 批量生成中（约 30-50 秒）...' : '⏳ 生成中...';
+  submitBtn.textContent = isBatch ? '⏳ 批量生成中（约 15-50 秒）...' : '⏳ 生成中...';
   statusEl.textContent = isBatch
-    ? '正在生成 标题 + 描述 + CTA 三种类型，预计 30-50 秒（实际时长视网络与模型响应而定）...'
+    ? '正在生成 标题 + 描述 + CTA 三种类型，预计 15-50 秒（实际时长视网络与模型响应而定）...'
     : '正在调用 AI 生成广告创意，预计 15-40 秒（视文案类型与数量而定）...';
   statusEl.className = 'status';
   resultsCard.style.display = 'none';
