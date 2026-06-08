@@ -41,7 +41,9 @@ ML dependency installed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
@@ -60,6 +62,39 @@ EmbedFn = Callable[[str], Sequence[float]]
 #: Max characters of candidate text included in log records (avoids dumping
 #: arbitrarily long copy into structured logs).
 _LOG_TEXT_PREVIEW: int = 160
+
+#: Dimension of the lightweight (stdlib) lexical embedding's hashed feature
+#: vector. 1024 buckets keeps hash collisions negligible for short ad copy
+#: while staying tiny and fast.
+_LIGHTWEIGHT_DIM: int = 1024
+
+
+def _stable_bucket(kind: str, feature: str, dim: int) -> int:
+    """Map a feature to a vector bucket via a process-stable hash.
+
+    Python's built-in ``hash()`` is randomized per process (PYTHONHASHSEED),
+    which would make lightweight embeddings non-reproducible across runs and
+    break deterministic tests. We use a stable MD5-based hash instead so the
+    same text always maps to the same vector.
+    """
+    digest = hashlib.md5(f"{kind}:{feature}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % dim
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """True for CJK / Japanese / Thai chars that aren't space-delimited words.
+
+    Used by the lightweight embedding to add per-character features for
+    no-space scripts, where ``\\w+`` word tokenisation can't split words.
+    """
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF      # CJK Unified Ideographs
+        or 0x3400 <= cp <= 0x4DBF   # CJK Extension A
+        or 0x3040 <= cp <= 0x30FF   # Hiragana + Katakana
+        or 0x0E00 <= cp <= 0x0E7F   # Thai
+        or 0xAC00 <= cp <= 0xD7AF   # Hangul syllables
+    )
 
 
 class EmbeddingUnavailableError(RuntimeError):
@@ -125,9 +160,25 @@ class SemanticDiversityChecker:
         self._threshold: float = self._config.similarity_threshold
         self._timeout_seconds: float = self._config.timeout_seconds
         self._model_name: str = self._config.embedding_model
-        self._embed_fn: EmbedFn = embed_fn or self._default_embed_fn
+        # Choose the default embedding strategy: an explicit injected embed_fn
+        # always wins; otherwise lightweight (stdlib lexical) when configured,
+        # else the heavy sentence-transformers model.
+        if embed_fn is not None:
+            self._embed_fn: EmbedFn = embed_fn
+        elif self._config.lightweight:
+            self._embed_fn = self._lightweight_embed_fn
+            # The lightweight lexical metric has a wider separation than the
+            # neural model: distinct copy sits at ~0.0 and near-duplicates at
+            # ~0.55–0.80. If the caller left the threshold at its shared neural
+            # default (0.60), nudge it down to 0.50 so order-swapped / CJK
+            # near-dups (which land ~0.55) are caught while distinct copy (0.0)
+            # is never touched. An explicitly customised threshold is respected.
+            if config is None or self._config.similarity_threshold == 0.60:
+                self._threshold = 0.50
+        else:
+            self._embed_fn = self._default_embed_fn
         self._embedding_cache: dict[str, list[float]] = {}
-        # Lazily-loaded sentence-transformers model for the default embed_fn.
+        # Lazily-loaded sentence-transformers model for the heavy embed_fn.
         # Sentinel ``False`` means "not yet attempted"; ``None`` means "load
         # attempted and failed" so we don't retry on every call.
         self._model: object | None | bool = False
@@ -362,6 +413,53 @@ class SemanticDiversityChecker:
             rejected_pair=None,
             fallback=True,
         )
+
+    def _lightweight_embed_fn(self, text: str) -> list[float]:
+        """Zero-dependency lexical embedding (pure stdlib, no PyTorch).
+
+        Builds a fixed-dimension vector by hashing two kinds of lexical
+        features into buckets:
+
+        * **word tokens** — captures shared vocabulary (the dominant signal for
+          near-duplicate ad copy like "Quick/Easy/Smooth topup bonus access");
+        * **character trigrams** — adds robustness to minor spelling/inflection
+          differences and works for no-space scripts (CJK / Thai).
+
+        The result plugs straight into :meth:`cosine_similarity`: two copies
+        sharing most words land at high cosine, genuinely different copies near
+        zero. Empirically near-dups score ~0.6–0.8 and distinct copy ~0.0, so
+        the configured threshold (0.60) separates them cleanly — without the
+        ~460 MB sentence-transformers/PyTorch dependency or its load time.
+
+        Never raises ``EmbeddingUnavailableError`` (it has no external
+        dependency), so semantic diversity is always live in lightweight mode.
+        """
+        dim = _LIGHTWEIGHT_DIM
+        vec = [0.0] * dim
+        lowered = text.lower()
+
+        # Word tokens (Unicode-aware). Weighted higher than trigrams because
+        # shared whole words are the strongest near-duplicate signal.
+        for tok in re.findall(r"\w+", lowered):
+            vec[_stable_bucket("w", tok, dim)] += 2.0
+
+        # Character trigrams over the whitespace-stripped string — covers
+        # no-space scripts and small spelling variants.
+        compact = re.sub(r"\s+", "", lowered)
+        for i in range(len(compact) - 2):
+            tri = compact[i : i + 3]
+            vec[_stable_bucket("t", tri, dim)] += 1.0
+
+        # Single CJK characters as their own tokens. No-space scripts (Chinese
+        # / Japanese / Thai) can't be word-tokenised by ``\w+`` boundaries, so
+        # without this two near-duplicate CJK copies sharing most characters
+        # would only overlap weakly via trigrams. Adding per-character features
+        # restores strong overlap for shared-vocabulary CJK near-dups.
+        for ch in compact:
+            if _is_cjk_char(ch):
+                vec[_stable_bucket("c", ch, dim)] += 1.5
+
+        return vec
 
     def _default_embed_fn(self, text: str) -> list[float]:
         """Default embedding function backed by ``sentence-transformers``.

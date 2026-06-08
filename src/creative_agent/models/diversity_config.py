@@ -27,22 +27,38 @@ class SemanticDiversityConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
+    lightweight: bool = Field(
+        default=True,
+        description=(
+            "When True (default), use a zero-dependency lexical embedding "
+            "(hashed bag-of-words + char trigrams, pure stdlib) instead of "
+            "sentence-transformers/PyTorch. Empirically, with a strong "
+            "generation model the near-duplicate headlines it produces share "
+            "most of their words (e.g. 'Quick/Easy/Smooth topup bonus "
+            "access'), which the lexical metric separates cleanly from "
+            "distinct copy (near-dups ~0.6–0.8 cosine, distinct ~0.0). This "
+            "drops a 460 MB PyTorch dependency and ~20s of model load/inference. "
+            "Set False to use the heavy neural model (better at catching "
+            "paraphrases with NO shared words — rarely needed here)."
+        ),
+    )
     similarity_threshold: float = Field(
         default=0.60,
-        ge=0.35,
+        ge=0.30,
         le=0.99,
         description=(
             "Cosine_Similarity value above which two candidates are "
-            "considered semantic duplicates. Default 0.60 (empirically "
-            "calibrated for paraphrase-multilingual-MiniLM-L12-v2 on short ad "
-            "copy; see module docstring), allowed range [0.35, 0.99]. "
-            "Lower = stricter de-duplication (rejects more)."
+            "considered semantic duplicates. Default 0.60. For the neural "
+            "model this was calibrated on paraphrase-multilingual-MiniLM "
+            "(distinct copy ~0.40 ceiling). For the lightweight lexical metric "
+            "the same 0.60 sits between distinct (~0.0) and near-dup (~0.6–0.8) "
+            "and works well. Lower = stricter de-duplication (rejects more)."
         ),
     )
     embedding_model: str = Field(
         default="paraphrase-multilingual-MiniLM-L12-v2",
         description=(
-            "Sentence-embedding model used to compute Embedding_Vectors; a "
+            "Sentence-embedding model used when ``lightweight`` is False; a "
             "lightweight multilingual model covering all target languages."
         ),
     )

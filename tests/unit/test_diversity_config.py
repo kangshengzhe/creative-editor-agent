@@ -32,14 +32,14 @@ class TestSemanticDiversityConfigDefaults:
 
 class TestSimilarityThresholdBounds:
     def test_lower_bound_inclusive(self):
-        assert SemanticDiversityConfig(similarity_threshold=0.35).similarity_threshold == 0.35
+        assert SemanticDiversityConfig(similarity_threshold=0.30).similarity_threshold == 0.30
 
     def test_upper_bound_inclusive(self):
         assert SemanticDiversityConfig(similarity_threshold=0.99).similarity_threshold == 0.99
 
     def test_below_lower_bound_rejected(self):
         with pytest.raises(ValidationError):
-            SemanticDiversityConfig(similarity_threshold=0.34)
+            SemanticDiversityConfig(similarity_threshold=0.29)
 
     def test_above_upper_bound_rejected(self):
         with pytest.raises(ValidationError):
