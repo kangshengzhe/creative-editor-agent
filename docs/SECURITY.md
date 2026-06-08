@@ -1,6 +1,6 @@
 # API Key 与 Secrets 保护指南
 
-本项目调用第三方 LLM（TokenPony / 小米 MiMo），需要携带 API Key。本文档列出
+本项目调用阿里云百炼 DashScope（Alibaba Cloud Model Studio）的 LLM API，需要携带 API Key。本文档列出
 **必须遵守**的密钥保护规则、推荐工作流，以及泄露后的处置步骤。
 
 ---
@@ -29,7 +29,7 @@ python-dotenv 在 RealLLMClient import 时 load_dotenv()
 os.getenv("TOKENPONY_API_KEY")
   │
   ▼
-HTTPS Authorization: Bearer <token>  →  TokenPony API
+HTTPS Authorization: Bearer <token>  →  DashScope (Alibaba Cloud)
 ```
 
 代码里**没有任何位置**硬编码 token。所有读取点都只有一个：
@@ -85,9 +85,11 @@ notepad .env
 填入：
 
 ```ini
-TOKENPONY_API_KEY=tp-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TOKENPONY_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-TOKENPONY_MODEL=mimo-v2.5-pro
+TOKENPONY_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TOKENPONY_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+TOKENPONY_MODEL=qwen3.7-max
+GENERATION_TEMPERATURE=0.8
+ENABLE_THINKING=false
 ```
 
 然后手动锁权限（Windows PowerShell 管理员）：

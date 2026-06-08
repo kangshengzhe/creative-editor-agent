@@ -42,7 +42,7 @@ mindmap
       CTA_Optimizer CTA 优化
     基础设施
       LLM 客户端
-        RealLLMClient TokenPony
+        RealLLMClient 阿里云百炼 DashScope
         MockLLMClient 测试用
       数据模型 Pydantic v2
       违禁词词典 4 语言
@@ -270,7 +270,7 @@ graph TD
 
     Src --> Llm[llm/]
     Llm --> L1[client.py 抽象基类]
-    Llm --> L2[real_client.py TokenPony]
+    Llm --> L2[real_client.py 阿里云百炼 DashScope]
     Llm --> L3[mock_client.py 测试用]
 
     Src --> Obs[observability/]
@@ -300,8 +300,8 @@ timeline
     阶段 3 任务规划 : Tasks 61 个任务 : 17 核心 + 44 可选测试
     阶段 4 代码实现 : 项目骨架 : 数据模型 : 5 大工具 : 编排层 : API 层
     阶段 5 安全配置 : git + .env : setup_env.py : SECURITY.md
-    阶段 6 端到端验证 : demo_minimal 跑通 : 真实 LLM 调用 80s : compliance_score 1.0
-    待办 准备交付 : 完整 demo : 实习汇报材料
+    阶段 6 端到端验证 : demo_minimal 跑通 : qwen3.7-max 调用 35-45s : compliance_score 1.0
+    阶段 7 交付验收 : 前端界面 : 多语言 20 市场 : 213 测试全过
 ```
 
 ---
@@ -367,4 +367,4 @@ mindmap
 > 2. **Orchestrator-Driven 架构**：5 个工具用显式编排，时延和合规可控
 > 3. **正确性属性先行**：10 个 PBT 属性在需求阶段就锁定，比如"合规过滤后无 BLOCK"、"评分值域 0-1"、"翻译占位符保留"
 > 4. **优雅降级**：单工具失败不影响整体，累计失败超阈值才熔断
-> 5. **真实 LLM 验证**：接入小米 mimo-v2.5-pro，跑通了端到端流程
+> 5. **真实 LLM 验证**：接入阿里云百炼 qwen3.7-max，关闭深度思考模式后批量生成 35-45 秒，213 个测试全部通过

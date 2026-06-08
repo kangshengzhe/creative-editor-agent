@@ -150,10 +150,9 @@ async def process_candidate(candidate, brief, platform_spec, deps):
     result = await deps.localization_tool.translate(candidate.source_copy, ...)
     candidate.localized_versions = result.localized_versions
 
-    # Step 3: 关键词嵌入（会修改 source_copy！）
+    # Step 3: 关键词覆盖检查（不重写文案，只报告哪些关键词命中/缺失）
     result = await deps.keyword_embedder.embed(candidate.source_copy, keywords, ...)
-    candidate.source_copy = result.embedded_copy  # ← 注意这里替换了原文
-    candidate.keyword_coverage = result.keyword_coverage
+    # source_copy 不变；keyword_coverage / hit_keywords / skipped_keywords 被填充
 
     # Step 4: 合规复检（因为嵌入可能引入新违规）
     report = await deps.compliance_checker.check(candidate.source_copy)
@@ -167,7 +166,7 @@ async def process_candidate(candidate, brief, platform_spec, deps):
 ```
 
 **你要理解的**：
-- Step 3 会**修改 source_copy**，所以 Step 4 必须在 Step 3 之后
+- Step 3 只**检查**关键词覆盖率，不重写文案（宁可标记缺失也不强行塞词导致文案变形）
 - 每步失败都被 try/except 捕获，设默认值 + 加 warning，不会中断流水线
 
 ---
@@ -209,10 +208,10 @@ def rank_candidates(candidates, request_id, ...):
 
 | 工具 | 输入 | 输出 | 调 LLM 吗 |
 |------|------|------|-----------|
-| Creative_Generator | brief + platform_spec | 7 个候选文案 | ✅ 1 次 |
+| Creative_Generator | brief + platform_spec | 15条标题/10条描述/5条CTA候选 | ✅ 多次(按角度并发) |
 | Compliance_Checker | 文案 + 语言 | 合规报告（分数+违规列表） | ❌ 本地词典 |
 | Localization_Tool | 文案 + 目标市场 | 多语言译文 | ✅ 每语言 1 次 |
-| Keyword_Embedder | 文案 + 关键词列表 | 嵌入后文案 + 覆盖率 | ✅ 1 次 |
+| Keyword_Embedder | 文案 + 关键词列表 | 覆盖率报告（不重写文案）| ❌ 只检查匹配 |
 | CTA_Optimizer | 候选 + 市场 + 类型 | CTA 强度评分 | ✅ 1 次 |
 
 ---
@@ -226,7 +225,7 @@ def rank_candidates(candidates, request_id, ...):
    → strip + lower + 去标点后比较（`_normalise` 函数）
 
 3. **为什么 Keyword_Embedder 之后要再跑一次 Compliance？**
-   → 嵌入关键词可能引入新的违禁词（比如嵌入 "bet" 触发 GAMBLING）
+   → Keyword_Embedder 现在只做覆盖率检查，不重写文案，所以复检和首检结果相同；复检步骤保留是为了兼容未来如果重新开启嵌入改写时的安全保障
 
 4. **如果 CTA_Optimizer 失败了会怎样？**
    → `cta_strength_score = 0.0`，candidate 不被剔除，warning 记录原因
